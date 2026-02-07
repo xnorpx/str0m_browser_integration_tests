@@ -1,0 +1,223 @@
+name: Browser Integration Tests
+
+on:
+  pull_request:
+  schedule:
+    # Run daily at 06:00 UTC
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_LOG: info,str0m=warn,sctp_proto=warn
+
+jobs:
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --all -- -D warnings
+
+  # Build the Rust server binary per OS x crypto provider
+  build-server:
+    name: "Build · ${{ matrix.os-label }} · ${{ matrix.crypto }}"
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux
+          - { os: ubuntu-latest,  os-label: Linux,   os-slug: linux,   crypto: aws-lc-rs,    artifact: server-linux-aws-lc-rs,    binary: target/release/server }
+          - { os: ubuntu-latest,  os-label: Linux,   os-slug: linux,   crypto: rust-crypto,  artifact: server-linux-rust-crypto,  binary: target/release/server }
+          - { os: ubuntu-latest,  os-label: Linux,   os-slug: linux,   crypto: openssl,      artifact: server-linux-openssl,      binary: target/release/server }
+          # macOS
+          - { os: macos-latest,   os-label: macOS,   os-slug: macos,   crypto: aws-lc-rs,    artifact: server-macos-aws-lc-rs,    binary: target/release/server }
+          - { os: macos-latest,   os-label: macOS,   os-slug: macos,   crypto: rust-crypto,  artifact: server-macos-rust-crypto,  binary: target/release/server }
+          - { os: macos-latest,   os-label: macOS,   os-slug: macos,   crypto: apple-crypto, artifact: server-macos-apple-crypto, binary: target/release/server }
+          # Windows
+          - { os: windows-latest, os-label: Windows, os-slug: windows, crypto: aws-lc-rs,    artifact: server-windows-aws-lc-rs,    binary: target/release/server.exe }
+          - { os: windows-latest, os-label: Windows, os-slug: windows, crypto: rust-crypto,  artifact: server-windows-rust-crypto,  binary: target/release/server.exe }
+          - { os: windows-latest, os-label: Windows, os-slug: windows, crypto: wincrypto,    artifact: server-windows-wincrypto,    binary: target/release/server.exe }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.crypto }}
+
+      - name: Build server binary
+        run: cargo build --release --bin server --no-default-features --features ${{ matrix.crypto }}
+
+      - name: Run Rust tests
+        run: cargo test --release --no-default-features --features ${{ matrix.crypto }}
+
+      - name: Upload server binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.binary }}
+          retention-days: 1
+
+      - name: Upload native test pcaps
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pcaps-${{ matrix.os-slug }}-${{ matrix.crypto }}-native
+          path: target/pcap/
+          retention-days: 5
+          if-no-files-found: ignore
+
+  # Browser test matrix (OS x crypto x browser)
+  test:
+    name: "${{ matrix.test.name }} · ${{ matrix.crypto }} · ${{ matrix.os-label }}"
+    needs: build-server
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        crypto: [aws-lc-rs, rust-crypto, openssl, apple-crypto, wincrypto]
+        test:
+          - { name: "Base · Chrome",  script: "test:chrome" }
+          - { name: "Base · Edge",    script: "test:edge" }
+          - { name: "Base · Firefox", script: "test:firefox" }
+          - { name: "SPED · Chrome",  script: "test:sped:chrome" }
+          - { name: "SPED · Edge",    script: "test:sped:edge" }
+          - { name: "SNAP · Chrome",  script: "test:snap:chrome" }
+          - { name: "WARP · Chrome",  script: "test:warp:chrome" }
+        exclude:
+          # OpenSSL skipped on macOS and Windows
+          - { os: macos-latest,   crypto: openssl }
+          - { os: windows-latest, crypto: openssl }
+          # apple-crypto only on macOS
+          - { os: ubuntu-latest,  crypto: apple-crypto }
+          - { os: windows-latest, crypto: apple-crypto }
+          # wincrypto only on Windows
+          - { os: ubuntu-latest,  crypto: wincrypto }
+          - { os: macos-latest,   crypto: wincrypto }
+          # wincrypto + Firefox: SChannel DTLS cipher mismatch
+          - { crypto: wincrypto, test: { name: "Base \xb7 Firefox", script: "test:firefox" } }
+          # wincrypto + SPED/WARP: SChannel can't handle SPED-embedded DTLS ClientHello
+          - { crypto: wincrypto, test: { name: "SPED · Chrome",  script: "test:sped:chrome" } }
+          - { crypto: wincrypto, test: { name: "SPED · Edge",    script: "test:sped:edge" } }
+          - { crypto: wincrypto, test: { name: "WARP · Chrome",  script: "test:warp:chrome" } }
+        # Map OS to labels, slugs, and binary names
+        include:
+          - os: ubuntu-latest
+            os-label: Linux
+            os-slug: linux
+            bin: server
+          - os: macos-latest
+            os-label: macOS
+            os-slug: macos
+            bin: server
+          - os: windows-latest
+            os-label: Windows
+            os-slug: windows
+            bin: server.exe
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Download server binary
+        uses: actions/download-artifact@v4
+        with:
+          name: server-${{ matrix.os-slug }}-${{ matrix.crypto }}
+          path: target/release
+
+      - name: Make server executable
+        if: runner.os != 'Windows'
+        run: chmod +x target/release/${{ matrix.bin }}
+
+      - name: Install npm dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Run ${{ matrix.test.name }}
+        env:
+          PREBUILT_SERVER_BINARY: ${{ github.workspace }}/target/release/${{ matrix.bin }}
+        run: npm run ${{ matrix.test.script }}
+      - name: Sanitize artifact name
+        if: always()
+        id: artifact
+        shell: bash
+        run: |
+          name="pcaps-${{ matrix.os-slug }}-${{ matrix.crypto }}-${{ matrix.test.script }}"
+          echo "name=${name//:/-}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload pcap captures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: target/pcap/
+          retention-days: 5
+          if-no-files-found: ignore
+
+  # Analyze pcap captures and generate RTT report
+  analyze:
+    name: "RTT Analysis"
+    needs: [build-server, test]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install matplotlib numpy
+
+      - name: Download all pcap artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-pcaps
+          pattern: pcaps-*
+          merge-multiple: false
+
+      - name: List downloaded pcaps
+        run: find all-pcaps -name '*.pcapng' | head -100 || echo "No pcapng files found"
+
+      - name: Run analysis
+        run: |
+          python scripts/analyze_pcaps.py all-pcaps \
+            --output-dir analysis \
+            --summary-file "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload analysis report & charts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rtt-analysis
+          path: analysis/
+          retention-days: 30
