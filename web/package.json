@@ -1,0 +1,29 @@
+{
+  "name": "str0m-browser-integration-tests",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Browser-based WebRTC integration tests for str0m using Karma",
+  "scripts": {
+    "test": "karma start karma.conf.js --single-run",
+    "test:chrome": "karma start karma.conf.js --single-run --browsers ChromeHeadless",
+    "test:edge": "karma start karma.conf.js --single-run --browsers EdgeHeadless",
+    "test:firefox": "karma start karma.conf.js --single-run --browsers FirefoxHeadless",
+    "test:snap:chrome": "karma start karma.warp.conf.js --single-run --browsers ChromeHeadlessSNAP",
+    "test:sped:edge": "karma start karma.warp.conf.js --single-run --browsers EdgeHeadlessSPED",
+    "test:sped:chrome": "karma start karma.warp.conf.js --single-run --browsers ChromeHeadlessSPED",
+    "test:warp:chrome": "karma start karma.warp.conf.js --single-run --browsers ChromeHeadlessWARP"
+  },
+  "devDependencies": {
+    "@types/jasmine": "^5.1.0",
+    "jasmine-core": "^5.4.0",
+    "karma": "^6.4.0",
+    "karma-chrome-launcher": "^3.2.0",
+    "karma-firefox-launcher": "^2.1.0",
+    "karma-jasmine": "^5.1.0",
+    "karma-webpack": "^5.0.0",
+    "ts-loader": "^9.5.0",
+    "typescript": "^5.7.0",
+    "webpack": "^5.97.0",
+    "webpack-cli": "^6.0.0"
+  }
+}
