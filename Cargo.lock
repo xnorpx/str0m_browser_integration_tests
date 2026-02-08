@@ -443,7 +443,7 @@ dependencies = [
 [[package]]
 name = "dimpl"
 version = "0.2.7"
-source = "git+https://github.com/algesten/dimpl?branch=dtls13#776e6ebaf9f1cd869560c562fa3c6cbe8ee2df73"
+source = "git+https://github.com/algesten/dimpl?branch=dtls13#e1aa9145df07aa43e4d8ddf477349d9d612c6fcf"
 dependencies = [
  "aes-gcm",
  "arrayvec",
@@ -1380,7 +1380,7 @@ dependencies = [
 [[package]]
 name = "str0m"
 version = "0.16.1"
-source = "git+https://github.com/algesten/str0m?branch=test%2Fdtls13#fee9b51c7cfb4ed74b6ed7ddd2d286eaa4d7611e"
+source = "git+https://github.com/algesten/str0m?branch=test%2Fdtls13#f0e14e5760c4f63caa697c9ede403955ecc3e866"
 dependencies = [
  "arrayvec",
  "combine",
@@ -1402,7 +1402,7 @@ dependencies = [
 [[package]]
 name = "str0m-apple-crypto"
 version = "0.1.4"
-source = "git+https://github.com/algesten/str0m?branch=test%2Fdtls13#fee9b51c7cfb4ed74b6ed7ddd2d286eaa4d7611e"
+source = "git+https://github.com/algesten/str0m?branch=test%2Fdtls13#f0e14e5760c4f63caa697c9ede403955ecc3e866"
 dependencies = [
  "apple-cryptokit-rs",
  "core-foundation",
@@ -1420,7 +1420,7 @@ dependencies = [
 [[package]]
 name = "str0m-aws-lc-rs"
 version = "0.1.2"
-source = "git+https://github.com/algesten/str0m?branch=test%2Fdtls13#fee9b51c7cfb4ed74b6ed7ddd2d286eaa4d7611e"
+source = "git+https://github.com/algesten/str0m?branch=test%2Fdtls13#f0e14e5760c4f63caa697c9ede403955ecc3e866"
 dependencies = [
  "aws-lc-rs",
  "dimpl",
@@ -1447,8 +1447,9 @@ dependencies = [
 [[package]]
 name = "str0m-openssl"
 version = "0.1.3"
-source = "git+https://github.com/algesten/str0m?branch=test%2Fdtls13#fee9b51c7cfb4ed74b6ed7ddd2d286eaa4d7611e"
+source = "git+https://github.com/algesten/str0m?branch=test%2Fdtls13#f0e14e5760c4f63caa697c9ede403955ecc3e866"
 dependencies = [
+ "dimpl",
  "libc",
  "openssl",
  "openssl-sys",
@@ -1459,7 +1460,7 @@ dependencies = [
 [[package]]
 name = "str0m-proto"
 version = "0.1.2"
-source = "git+https://github.com/algesten/str0m?branch=test%2Fdtls13#fee9b51c7cfb4ed74b6ed7ddd2d286eaa4d7611e"
+source = "git+https://github.com/algesten/str0m?branch=test%2Fdtls13#f0e14e5760c4f63caa697c9ede403955ecc3e866"
 dependencies = [
  "base64ct",
  "dimpl",
@@ -1470,7 +1471,7 @@ dependencies = [
 [[package]]
 name = "str0m-rust-crypto"
 version = "0.1.2"
-source = "git+https://github.com/algesten/str0m?branch=test%2Fdtls13#fee9b51c7cfb4ed74b6ed7ddd2d286eaa4d7611e"
+source = "git+https://github.com/algesten/str0m?branch=test%2Fdtls13#f0e14e5760c4f63caa697c9ede403955ecc3e866"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -1486,8 +1487,9 @@ dependencies = [
 [[package]]
 name = "str0m-wincrypto"
 version = "0.3.2"
-source = "git+https://github.com/algesten/str0m?branch=test%2Fdtls13#fee9b51c7cfb4ed74b6ed7ddd2d286eaa4d7611e"
+source = "git+https://github.com/algesten/str0m?branch=test%2Fdtls13#f0e14e5760c4f63caa697c9ede403955ecc3e866"
 dependencies = [
+ "dimpl",
  "str0m-proto",
  "tracing",
  "windows",

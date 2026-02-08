@@ -11,9 +11,9 @@ path = "src/bin/server.rs"
 default = ["aws-lc-rs"]
 aws-lc-rs = ["str0m/aws-lc-rs"]
 rust-crypto = ["str0m/rust-crypto"]
-openssl = ["str0m/openssl"]
+openssl = ["str0m/openssl", "str0m/dtls13"]
 apple-crypto = ["str0m/apple-crypto"]
-wincrypto = ["str0m/wincrypto"]
+wincrypto = ["str0m/wincrypto", "str0m/dtls13"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
