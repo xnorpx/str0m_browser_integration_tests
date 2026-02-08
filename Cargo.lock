@@ -1195,8 +1195,9 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "sctp-proto"
-version = "0.7.0"
-source = "git+https://github.com/algesten/sctp-proto?branch=fix%2Frwnd-and-sack-immediately#b2f26f4ab2136f4b14a5c520799d9c8d04f6da1d"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "39004d91c2b22aca3f16d8a9dbc383b2b9495812669d137b82c85b76b579baae"
 dependencies = [
  "bytes",
  "crc",
