@@ -83,6 +83,3 @@ lto = 'fat'
 
 [profile.bench]
 debug = 1
-
-[patch.crates-io]
-sctp-proto = { git = "https://github.com/algesten/sctp-proto", branch = "fix/rwnd-and-sack-immediately" }
