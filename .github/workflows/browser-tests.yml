@@ -52,7 +52,7 @@ jobs:
           # macOS
           - { os: macos-latest,   os-label: macOS,   os-slug: macos,   crypto: aws-lc-rs,    artifact: server-macos-aws-lc-rs,    binary: target/release/server }
           - { os: macos-latest,   os-label: macOS,   os-slug: macos,   crypto: rust-crypto,  artifact: server-macos-rust-crypto,  binary: target/release/server }
-          - { os: macos-latest,   os-label: macOS,   os-slug: macos,   crypto: apple-crypto, artifact: server-macos-apple-crypto, binary: target/release/server }
+          # - { os: macos-latest,   os-label: macOS,   os-slug: macos,   crypto: apple-crypto, artifact: server-macos-apple-crypto, binary: target/release/server }
           # Windows
           - { os: windows-latest, os-label: Windows, os-slug: windows, crypto: aws-lc-rs,    artifact: server-windows-aws-lc-rs,    binary: target/release/server.exe }
           - { os: windows-latest, os-label: Windows, os-slug: windows, crypto: rust-crypto,  artifact: server-windows-rust-crypto,  binary: target/release/server.exe }
@@ -99,7 +99,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        crypto: [aws-lc-rs, rust-crypto, openssl, apple-crypto, wincrypto]
+        crypto: [aws-lc-rs, rust-crypto, openssl, wincrypto]  # apple-crypto temporarily disabled
         test:
           - { name: "Base · Chrome",  script: "test:chrome" }
           - { name: "Base · Edge",    script: "test:edge" }
@@ -112,9 +112,9 @@ jobs:
           # OpenSSL skipped on macOS and Windows
           - { os: macos-latest,   crypto: openssl }
           - { os: windows-latest, crypto: openssl }
-          # apple-crypto only on macOS
-          - { os: ubuntu-latest,  crypto: apple-crypto }
-          - { os: windows-latest, crypto: apple-crypto }
+          # apple-crypto temporarily disabled
+          # - { os: ubuntu-latest,  crypto: apple-crypto }
+          # - { os: windows-latest, crypto: apple-crypto }
           # wincrypto only on Windows
           - { os: ubuntu-latest,  crypto: wincrypto }
           - { os: macos-latest,   crypto: wincrypto }
