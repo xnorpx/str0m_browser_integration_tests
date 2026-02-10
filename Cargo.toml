@@ -11,9 +11,9 @@ path = "src/bin/server.rs"
 default = ["aws-lc-rs"]
 aws-lc-rs = ["str0m/aws-lc-rs"]
 rust-crypto = ["str0m/rust-crypto"]
-openssl = ["str0m/openssl"]
+openssl = ["str0m/openssl", "str0m/dtls13"]
 apple-crypto = ["str0m/apple-crypto"]
-wincrypto = ["str0m/wincrypto"]
+wincrypto = ["str0m/wincrypto", "str0m/dtls13"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
@@ -22,7 +22,7 @@ if-addrs = "0.14"
 mimalloc = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-str0m = { git = "https://github.com/algesten/str0m", default-features = false }
+str0m = { git = "https://github.com/algesten/str0m", default-features = false, branch = "test/dtls13" }
 tokio = { version = "1", features = ["full"] }
 tokio-tungstenite = "0.26"
 tracing = "0.1"
