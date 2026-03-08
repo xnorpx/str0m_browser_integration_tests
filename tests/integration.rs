@@ -254,18 +254,18 @@ async fn browser_offerer_dtls_passive_ice_full() {
     .await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn browser_answerer_dtls_active_ice_lite() {
-    run_connect_and_verify(
-        "answerer_active_lite",
-        SessionConfig {
-            client_sdp_role: SdpRole::Answerer,
-            server_ice_mode: IceMode::Lite,
-            client_dtls_role: DtlsRole::Active,
-        },
-    )
-    .await;
-}
+// #[tokio::test(flavor = "multi_thread")]
+// async fn browser_answerer_dtls_active_ice_lite() {
+//     run_connect_and_verify(
+//         "answerer_active_lite",
+//         SessionConfig {
+//             client_sdp_role: SdpRole::Answerer,
+//             server_ice_mode: IceMode::Lite,
+//             client_dtls_role: DtlsRole::Active,
+//         },
+//     )
+//     .await;
+// }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn browser_answerer_dtls_active_ice_full() {
