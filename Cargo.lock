@@ -1469,7 +1469,7 @@ dependencies = [
 [[package]]
 name = "str0m"
 version = "0.16.2"
-source = "git+https://github.com/algesten/str0m?rev=a3a52b46e66e97f2653c488f7ad246987f22959d#a3a52b46e66e97f2653c488f7ad246987f22959d"
+source = "git+https://github.com/algesten/str0m?rev=1d28c56894f7507bbc90df38998baccd835f4f69#1d28c56894f7507bbc90df38998baccd835f4f69"
 dependencies = [
  "arrayvec",
  "combine",
@@ -1492,7 +1492,7 @@ dependencies = [
 [[package]]
 name = "str0m-apple-crypto"
 version = "0.1.4"
-source = "git+https://github.com/algesten/str0m?rev=a3a52b46e66e97f2653c488f7ad246987f22959d#a3a52b46e66e97f2653c488f7ad246987f22959d"
+source = "git+https://github.com/algesten/str0m?rev=1d28c56894f7507bbc90df38998baccd835f4f69#1d28c56894f7507bbc90df38998baccd835f4f69"
 dependencies = [
  "apple-cryptokit-rs",
  "core-foundation",
@@ -1511,7 +1511,7 @@ dependencies = [
 [[package]]
 name = "str0m-aws-lc-rs"
 version = "0.1.2"
-source = "git+https://github.com/algesten/str0m?rev=a3a52b46e66e97f2653c488f7ad246987f22959d#a3a52b46e66e97f2653c488f7ad246987f22959d"
+source = "git+https://github.com/algesten/str0m?rev=1d28c56894f7507bbc90df38998baccd835f4f69#1d28c56894f7507bbc90df38998baccd835f4f69"
 dependencies = [
  "aws-lc-rs",
  "dimpl",
@@ -1539,7 +1539,7 @@ dependencies = [
 [[package]]
 name = "str0m-openssl"
 version = "0.1.3"
-source = "git+https://github.com/algesten/str0m?rev=a3a52b46e66e97f2653c488f7ad246987f22959d#a3a52b46e66e97f2653c488f7ad246987f22959d"
+source = "git+https://github.com/algesten/str0m?rev=1d28c56894f7507bbc90df38998baccd835f4f69#1d28c56894f7507bbc90df38998baccd835f4f69"
 dependencies = [
  "dimpl",
  "libc",
@@ -1553,7 +1553,7 @@ dependencies = [
 [[package]]
 name = "str0m-proto"
 version = "0.1.2"
-source = "git+https://github.com/algesten/str0m?rev=a3a52b46e66e97f2653c488f7ad246987f22959d#a3a52b46e66e97f2653c488f7ad246987f22959d"
+source = "git+https://github.com/algesten/str0m?rev=1d28c56894f7507bbc90df38998baccd835f4f69#1d28c56894f7507bbc90df38998baccd835f4f69"
 dependencies = [
  "base64ct",
  "dimpl",
@@ -1565,7 +1565,7 @@ dependencies = [
 [[package]]
 name = "str0m-rust-crypto"
 version = "0.1.2"
-source = "git+https://github.com/algesten/str0m?rev=a3a52b46e66e97f2653c488f7ad246987f22959d#a3a52b46e66e97f2653c488f7ad246987f22959d"
+source = "git+https://github.com/algesten/str0m?rev=1d28c56894f7507bbc90df38998baccd835f4f69#1d28c56894f7507bbc90df38998baccd835f4f69"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -1582,7 +1582,7 @@ dependencies = [
 [[package]]
 name = "str0m-wincrypto"
 version = "0.3.2"
-source = "git+https://github.com/algesten/str0m?rev=a3a52b46e66e97f2653c488f7ad246987f22959d#a3a52b46e66e97f2653c488f7ad246987f22959d"
+source = "git+https://github.com/algesten/str0m?rev=1d28c56894f7507bbc90df38998baccd835f4f69#1d28c56894f7507bbc90df38998baccd835f4f69"
 dependencies = [
  "dimpl",
  "str0m-proto",
