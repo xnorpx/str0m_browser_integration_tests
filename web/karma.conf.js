@@ -33,7 +33,7 @@ module.exports = function (config) {
     ],
 
     files: [
-      {pattern: 'src/webrtc-client.spec.ts', watched: true},
+      { pattern: 'src/webrtc-client.spec.ts', watched: true },
     ],
 
     preprocessors: {
@@ -85,6 +85,32 @@ module.exports = function (config) {
           // Force DTLS 1.3 (4 = TLS/DTLS 1.3 in Firefox version numbering)
           'security.tls.version.max': 4,
           'media.peerconnection.dtls.version.max': 0x0304,
+        },
+      },
+      FirefoxHeadlessDTLS12: {
+        base: 'FirefoxHeadless',
+        prefs: {
+          'media.peerconnection.ice.loopback': true,
+          'media.peerconnection.ice.obfuscate_host_addresses': false,
+          'media.peerconnection.ice.default_address_only': true,
+          'privacy.reduceTimerPrecision': false,
+          'privacy.resistFingerprinting': false,
+          'media.autoplay.default': 0,
+          // Force DTLS 1.2 max
+          'security.tls.version.max': 3,
+          'media.peerconnection.dtls.version.max': 0x0303,
+        },
+      },
+      FirefoxHeadlessAuto: {
+        base: 'FirefoxHeadless',
+        prefs: {
+          'media.peerconnection.ice.loopback': true,
+          'media.peerconnection.ice.obfuscate_host_addresses': false,
+          'media.peerconnection.ice.default_address_only': true,
+          'privacy.reduceTimerPrecision': false,
+          'privacy.resistFingerprinting': false,
+          'media.autoplay.default': 0,
+          // Auto: allow Firefox to negotiate naturally (defaults)
         },
       },
 

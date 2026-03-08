@@ -7,7 +7,7 @@ use str0m::{
     Candidate, Event, Input, Output, Rtc, RtcConfig,
     change::{SdpAnswer, SdpOffer, SdpPendingOffer},
     channel::ChannelId,
-    config::DtlsCert,
+    config::{DtlsCert, DtlsVersion},
     net::{Protocol, Receive},
 };
 use tokio::{net::UdpSocket, sync::oneshot};
@@ -53,7 +53,7 @@ impl Peer {
         let socket = UdpSocket::from_std(std_socket)?;
         let local_addr = socket.local_addr()?;
 
-        let mut config = RtcConfig::new();
+        let mut config = RtcConfig::new().set_dtls_version(DtlsVersion::Auto);
         if ice_lite {
             config = config.set_ice_lite(true);
         }
