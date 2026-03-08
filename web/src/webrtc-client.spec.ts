@@ -11,8 +11,8 @@
  *   7. Destroys the session and cleans up.
  */
 
-import {SessionConfig, ServerMessage} from './protocol';
-import {connectWs, sendMsg, recvMsg, waitForIceGathering, closeWs} from './signaling';
+import { SessionConfig, ServerMessage } from './protocol';
+import { connectWs, sendMsg, recvMsg, waitForIceGathering, closeWs } from './signaling';
 
 /** Read the server WS port injected by karma-str0m-server plugin. */
 function getServerWsPort(): number {
@@ -46,11 +46,11 @@ function allocSessionId(testName: string): string {
 function expectMsg<T extends ServerMessage['type']>(
   msg: ServerMessage,
   expectedType: T,
-): Extract<ServerMessage, {type: T}> {
+): Extract<ServerMessage, { type: T }> {
   if (msg.type !== expectedType) {
     throw new Error(`Expected ${expectedType}, got ${msg.type}: ${JSON.stringify(msg)}`);
   }
-  return msg as Extract<ServerMessage, {type: T}>;
+  return msg as Extract<ServerMessage, { type: T }>;
 }
 
 /**
@@ -70,7 +70,7 @@ async function runConnectAndVerify(testName: string, config: SessionConfig): Pro
   const ws = await connectWs(wsUrl);
 
   try {
-    sendMsg(ws, {type: 'create', session_id: sid, config});
+    sendMsg(ws, { type: 'create', session_id: sid, config });
     const created = await recvMsg(ws);
     expectMsg(created, 'created');
 
@@ -79,7 +79,7 @@ async function runConnectAndVerify(testName: string, config: SessionConfig): Pro
     let dcPromise: Promise<RTCDataChannel> | undefined;
 
     if (config.client_sdp_role === 'offerer') {
-      pc = new RTCPeerConnection({iceServers: []});
+      pc = new RTCPeerConnection({ iceServers: [] });
       dc = pc.createDataChannel('test-data');
 
       const offer = await pc.createOffer();
@@ -89,14 +89,14 @@ async function runConnectAndVerify(testName: string, config: SessionConfig): Pro
       const completeSdp = pc.localDescription!.sdp;
       console.log(`[test] Sending offer (${completeSdp.length} bytes)`);
 
-      sendMsg(ws, {type: 'sdp', session_id: sid, sdp: completeSdp});
+      sendMsg(ws, { type: 'sdp', session_id: sid, sdp: completeSdp });
       const answerMsg = await recvMsg(ws);
-      const {sdp: answerSdp} = expectMsg(answerMsg, 'sdp');
+      const { sdp: answerSdp } = expectMsg(answerMsg, 'sdp');
 
       console.log(`[test] Received answer (${answerSdp.length} bytes)`);
-      await pc.setRemoteDescription({type: 'answer', sdp: answerSdp});
+      await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
     } else {
-      pc = new RTCPeerConnection({iceServers: []});
+      pc = new RTCPeerConnection({ iceServers: [] });
 
       dcPromise = new Promise<RTCDataChannel>((resolve, reject) => {
         const timeout = setTimeout(
@@ -110,10 +110,10 @@ async function runConnectAndVerify(testName: string, config: SessionConfig): Pro
       });
 
       const offerMsg = await recvMsg(ws);
-      const {sdp: offerSdp} = expectMsg(offerMsg, 'sdp');
+      const { sdp: offerSdp } = expectMsg(offerMsg, 'sdp');
 
       console.log(`[test] Received offer (${offerSdp.length} bytes)`);
-      await pc.setRemoteDescription({type: 'offer', sdp: offerSdp});
+      await pc.setRemoteDescription({ type: 'offer', sdp: offerSdp });
 
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
@@ -122,10 +122,10 @@ async function runConnectAndVerify(testName: string, config: SessionConfig): Pro
       const completeSdp = pc.localDescription!.sdp;
       console.log(`[test] Sending answer (${completeSdp.length} bytes)`);
 
-      sendMsg(ws, {type: 'sdp', session_id: sid, sdp: completeSdp});
+      sendMsg(ws, { type: 'sdp', session_id: sid, sdp: completeSdp });
     }
 
-    sendMsg(ws, {type: 'ready', session_id: sid});
+    sendMsg(ws, { type: 'ready', session_id: sid });
     const ready = await recvMsg(ws);
     expectMsg(ready, 'ready');
 
@@ -193,7 +193,7 @@ async function runConnectAndVerify(testName: string, config: SessionConfig): Pro
 
     console.log(`[test] ${testName}: PASSED (RTT: ${rttMs.toFixed(2)}ms)`);
 
-    sendMsg(ws, {type: 'destroy', session_id: sid});
+    sendMsg(ws, { type: 'destroy', session_id: sid });
     const destroyed = await recvMsg(ws);
     expectMsg(destroyed, 'destroyed');
 

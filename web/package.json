@@ -8,6 +8,7 @@
     "test:chrome": "karma start karma.conf.js --single-run --browsers ChromeHeadless",
     "test:edge": "karma start karma.conf.js --single-run --browsers EdgeHeadless",
     "test:firefox": "karma start karma.conf.js --single-run --browsers FirefoxHeadless",
+    "test:firefox:dtls13": "karma start karma.conf.js --single-run --browsers FirefoxHeadlessDTLS13",
     "test:snap:chrome": "karma start karma.warp.conf.js --single-run --browsers ChromeHeadlessSNAP",
     "test:sped:edge": "karma start karma.warp.conf.js --single-run --browsers EdgeHeadlessSPED",
     "test:sped:chrome": "karma start karma.warp.conf.js --single-run --browsers ChromeHeadlessSPED",

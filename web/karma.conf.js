@@ -73,6 +73,20 @@ module.exports = function (config) {
           'media.autoplay.default': 0,
         },
       },
+      FirefoxHeadlessDTLS13: {
+        base: 'FirefoxHeadless',
+        prefs: {
+          'media.peerconnection.ice.loopback': true,
+          'media.peerconnection.ice.obfuscate_host_addresses': false,
+          'media.peerconnection.ice.default_address_only': true,
+          'privacy.reduceTimerPrecision': false,
+          'privacy.resistFingerprinting': false,
+          'media.autoplay.default': 0,
+          // Force DTLS 1.3 (4 = TLS/DTLS 1.3 in Firefox version numbering)
+          'security.tls.version.max': 4,
+          'media.peerconnection.dtls.version.max': 0x0304,
+        },
+      },
 
       ChromeHeadlessSNAP: {
         base: 'ChromeHeadless',
