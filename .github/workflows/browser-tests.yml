@@ -90,6 +90,66 @@ jobs:
           retention-days: 5
           if-no-files-found: ignore
 
+  # Pion ↔ str0m interop tests (data channel echo, both directions)
+  pion-interop:
+    name: "Pion Interop · ${{ matrix.os-label }} · ${{ matrix.crypto }}"
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, os-label: Linux, crypto: aws-lc-rs }
+          - { os: ubuntu-latest, os-label: Linux, crypto: rust-crypto }
+          - { os: ubuntu-latest, os-label: Linux, crypto: openssl }
+          - { os: macos-latest,  os-label: macOS, crypto: aws-lc-rs }
+          - { os: macos-latest,  os-label: macOS, crypto: rust-crypto }
+          - { os: macos-latest,  os-label: macOS, crypto: apple-crypto }
+          - { os: windows-latest, os-label: Windows, crypto: aws-lc-rs }
+          - { os: windows-latest, os-label: Windows, crypto: rust-crypto }
+          - { os: windows-latest, os-label: Windows, crypto: wincrypto }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: pion-${{ matrix.crypto }}
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache-dependency-path: pion/go.sum
+
+      - name: Build Pion binaries (Unix)
+        if: runner.os != 'Windows'
+        working-directory: pion
+        run: |
+          go build -o server ./cmd/server/
+          go build -o client ./cmd/client/
+
+      - name: Build Pion binaries (Windows)
+        if: runner.os == 'Windows'
+        working-directory: pion
+        run: |
+          go build -o server.exe ./cmd/server/
+          go build -o client.exe ./cmd/client/
+
+      - name: Run Pion interop tests
+        run: cargo test --release --test pion_interop --no-default-features --features ${{ matrix.crypto }}
+
+      - name: Upload Pion interop pcaps
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pcaps-pion-${{ matrix.os }}-${{ matrix.crypto }}
+          path: target/pcap/
+          retention-days: 5
+          if-no-files-found: ignore
+
   # Browser test matrix (OS x crypto x browser)
   test:
     name: "${{ matrix.test.name }} · ${{ matrix.crypto }} · ${{ matrix.os-label }}"
@@ -183,10 +243,70 @@ jobs:
           retention-days: 5
           if-no-files-found: ignore
 
+  # Browser ↔ Pion server tests (OS x browser)
+  pion-browser-test:
+    name: "Pion · ${{ matrix.test.name }} · ${{ matrix.os-label }}"
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        test:
+          - { name: "Chrome",  script: "test:pion:chrome" }
+          - { name: "Edge",    script: "test:pion:edge" }
+          - { name: "Firefox", script: "test:pion:firefox" }
+        include:
+          - os: ubuntu-latest
+            os-label: Linux
+            os-slug: linux
+          - os: macos-latest
+            os-label: macOS
+            os-slug: macos
+          - os: windows-latest
+            os-label: Windows
+            os-slug: windows
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache-dependency-path: pion/go.sum
+
+      - name: Install npm dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Run Pion · ${{ matrix.test.name }}
+        run: npm run ${{ matrix.test.script }}
+
+      - name: Sanitize artifact name
+        if: always()
+        id: artifact
+        shell: bash
+        run: |
+          name="pcaps-pion-browser-${{ matrix.os-slug }}-${{ matrix.test.script }}"
+          echo "name=${name//:/-}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload pcap captures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: target/pcap/
+          retention-days: 5
+          if-no-files-found: ignore
+
   # Analyze pcap captures and generate RTT report
   analyze:
     name: "RTT Analysis"
-    needs: [build-server, test]
+    needs: [build-server, test, pion-interop, pion-browser-test]
     if: always()
     runs-on: ubuntu-latest
     steps:

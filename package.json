@@ -12,6 +12,9 @@
     "test:snap:chrome": "npm run test:snap:chrome --prefix web",
     "test:sped:edge": "npm run test:sped:edge --prefix web",
     "test:sped:chrome": "npm run test:sped:chrome --prefix web",
-    "test:warp:chrome": "npm run test:warp:chrome --prefix web"
+    "test:warp:chrome": "npm run test:warp:chrome --prefix web",
+    "test:pion:chrome": "npm run test:pion:chrome --prefix web",
+    "test:pion:edge": "npm run test:pion:edge --prefix web",
+    "test:pion:firefox": "npm run test:pion:firefox --prefix web"
   }
 }

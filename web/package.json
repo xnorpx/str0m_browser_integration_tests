@@ -12,7 +12,10 @@
     "test:snap:chrome": "karma start karma.warp.conf.js --single-run --browsers ChromeHeadlessSNAP",
     "test:sped:edge": "karma start karma.warp.conf.js --single-run --browsers EdgeHeadlessSPED",
     "test:sped:chrome": "karma start karma.warp.conf.js --single-run --browsers ChromeHeadlessSPED",
-    "test:warp:chrome": "karma start karma.warp.conf.js --single-run --browsers ChromeHeadlessWARP"
+    "test:warp:chrome": "karma start karma.warp.conf.js --single-run --browsers ChromeHeadlessWARP",
+    "test:pion:chrome": "karma start karma.pion.conf.js --single-run --browsers ChromeHeadless",
+    "test:pion:edge": "karma start karma.pion.conf.js --single-run --browsers EdgeHeadless",
+    "test:pion:firefox": "karma start karma.pion.conf.js --single-run --browsers FirefoxHeadless"
   },
   "devDependencies": {
     "@types/jasmine": "^5.1.0",

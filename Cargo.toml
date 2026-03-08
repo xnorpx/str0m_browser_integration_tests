@@ -7,6 +7,10 @@ edition = "2024"
 name = "server"
 path = "src/bin/server.rs"
 
+[[bin]]
+name = "str0m-client"
+path = "src/bin/client.rs"
+
 [features]
 default = ["aws-lc-rs"]
 aws-lc-rs = ["str0m/aws-lc-rs"]

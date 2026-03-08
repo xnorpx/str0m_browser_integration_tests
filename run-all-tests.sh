@@ -113,6 +113,51 @@ else
   echo -e "${CYAN}[SKIP] Skipping SPED Edge (not found)${NC}"; ((SKIPPED++))
 fi
 
+# -- Pion interop tests -----------------------------------------------
+echo -e "\n${BOLD}===============================================${NC}"
+echo -e "${BOLD}  Pion ↔ str0m interop tests${NC}"
+echo -e "${BOLD}===============================================${NC}"
+
+has_go=false
+if command -v go &>/dev/null; then
+  has_go=true
+fi
+
+if $has_go; then
+  echo "Building Pion binaries..."
+  (cd pion && go build -o server ./cmd/server/ && go build -o client ./cmd/client/)
+  run "Pion interop"  cargo test --release --test pion_interop
+else
+  echo -e "${CYAN}[SKIP] Skipping Pion interop (Go not found)${NC}"; ((SKIPPED++))
+fi
+
+# -- Pion browser tests -----------------------------------------------
+echo -e "\n${BOLD}===============================================${NC}"
+echo -e "${BOLD}  Browser ↔ Pion server tests${NC}"
+echo -e "${BOLD}===============================================${NC}"
+
+if $has_go; then
+  if $has_chrome; then
+    run "Pion · Chrome"  npm run test:pion:chrome
+  else
+    echo -e "${CYAN}[SKIP] Skipping Pion Chrome (not found)${NC}"; ((SKIPPED++))
+  fi
+
+  if $has_edge; then
+    run "Pion · Edge"    npm run test:pion:edge
+  else
+    echo -e "${CYAN}[SKIP] Skipping Pion Edge (not found)${NC}"; ((SKIPPED++))
+  fi
+
+  if $has_firefox; then
+    run "Pion · Firefox" npm run test:pion:firefox
+  else
+    echo -e "${CYAN}[SKIP] Skipping Pion Firefox (not found)${NC}"; ((SKIPPED++))
+  fi
+else
+  echo -e "${CYAN}[SKIP] Skipping Pion browser tests (Go not found)${NC}"; ((SKIPPED+=3))
+fi
+
 # -- Summary ----------------------------------------------------------
 echo -e "\n${BOLD}===============================================${NC}"
 echo -e "${BOLD}  Summary${NC}"

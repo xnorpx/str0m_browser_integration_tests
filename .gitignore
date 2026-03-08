@@ -3,3 +3,7 @@
 web/node_modules/
 web/dist/
 __pycache__/
+pion/server
+pion/server.exe
+pion/client
+pion/client.exe
