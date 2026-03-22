@@ -297,28 +297,36 @@ class SessionAnalysis:
 def analyze_session(packets: list[Packet], session_id: str) -> SessionAnalysis:
     """Analyze a session's packets and count RTTs per protocol phase.
 
+    Uses packet timestamps to detect parallel phases:
+
     ICE (STUN):
-      Matches STUN Binding requests to responses by transaction ID.
-      Each unique completed transaction = 1 ICE RTT.
+      Only the *first* completed STUN transaction counts as the ICE
+      connectivity check RTT.  Subsequent STUN exchanges are consent
+      checks or triggered checks that happen *after* ICE is already
+      established and don't block the connection.
 
     DTLS handshake:
       Detects DTLS version from cleartext handshake messages:
         - Certificate / ServerKeyExchange visible  -> DTLS 1.2
         - Only ClientHello / ServerHello visible   -> DTLS 1.3
-      Counts direction changes among DTLS-HS records; each pair of
-      opposing flights = 1 RTT.  Works correctly for both versions:
-        - DTLS 1.2 w/o HVR: CH -> SH..SHD -> Cert..Fin -> CCS+Fin = 2 RTTs
-        - DTLS 1.2 w/  HVR: + CH -> HVR extra flight          = 3 RTTs
-        - DTLS 1.3 w/o HVR: CH -> SH (rest encrypted)         = 1 RTT
-        - DTLS 1.3 w/  HVR: + CH -> HRR extra flight           = 2 RTTs
+      RTT count based on cleartext direction changes:
+        - DTLS 1.2 w/o HVR: CH -> SH..SHD -> Cert..CCS+Fin = 2 RTTs
+        - DTLS 1.2 w/  HVR: + CH -> HVR extra flight        = 3 RTTs
+        - DTLS 1.3 w/o HVR: CH -> SH (rest encrypted)       = 1 RTT
+        - DTLS 1.3 w/  HVR: + CH -> HRR extra flight         = 2 RTTs
+
+    ICE/DTLS overlap detection:
+      If the first DTLS HS packet arrives within 5ms of the first
+      completed STUN transaction response, ICE and DTLS are parallel
+      (the browser sent CH concurrently with or right after the STUN
+      check).  In that case, ICE + first DTLS flight = 1 combined RTT
+      instead of 2 sequential RTTs.
 
     SCTP handshake:
-      With SNAP the 4-way handshake (INIT/INIT-ACK/COOKIE-ECHO/COOKIE-ACK)
-      is skipped entirely.  Detection uses the SCTP COOKIE-ACK fingerprint:
-      it always produces a DTLS-APP record of ~40 bytes (16-byte SCTP
-      payload + AEAD overhead).  No other SCTP message is that small.
-      If record_len <= 44 appears among the first 8 APP records, the
-      handshake is present (2 RTTs); otherwise it was skipped (0 RTTs).
+      With SNAP the 4-way handshake is skipped entirely.  Detection
+      uses the SCTP COOKIE-ACK fingerprint: record_len <= 44 among
+      the first 8 APP records means the handshake is present (2 RTTs);
+      otherwise it was skipped by SNAP (0 RTTs).
     """
     result = SessionAnalysis(session_id=session_id)
     result.total_packets = len(packets)
@@ -330,11 +338,12 @@ def analyze_session(packets: list[Packet], session_id: str) -> SessionAnalysis:
     server_addr = (packets[0].src_ip, packets[0].src_port)
 
     # ── Pass 1: extract protocol details from every packet ───────
-    stun_txns: dict[str, dict[str, bool]] = {}  # txn_id -> {req, resp}
+    stun_txns: dict[str, dict] = {}  # txn_id -> {req, resp, req_ts, resp_ts}
     cleartext_hs_types: set[int] = set()
-    dtls_hs_directions: list[str] = []    # direction per HS record
+    dtls_hs_directions: list[str] = []    # direction per epoch-0 HS record
     dtls_app_record_lens: list[int] = []  # record_len of every APP record
     pkt_top_protos: list[str] = []        # top-level proto per packet
+    first_dtls_hs_ts: int | None = None   # timestamp of first DTLS HS packet
 
     for pkt in packets:
         payload = pkt.payload
@@ -347,16 +356,23 @@ def analyze_session(packets: list[Packet], session_id: str) -> SessionAnalysis:
         pkt_top_protos.append(top_proto)
         first = payload[0]
 
-        # ── STUN: track transactions by ID ──────────────────────
+        # ── STUN: track transactions by ID and timestamp ────────
         if first in (0x00, 0x01) and len(payload) >= 20:
             msg_type = struct.unpack_from(">H", payload, 0)[0]
             txn = parse_stun_txn_id(payload)
             if txn:
-                entry = stun_txns.setdefault(txn, {"req": False, "resp": False})
+                entry = stun_txns.setdefault(txn, {
+                    "req": False, "resp": False,
+                    "req_ts": None, "resp_ts": None,
+                })
                 if msg_type == _STUN_BINDING_REQUEST:
                     entry["req"] = True
+                    if entry["req_ts"] is None:
+                        entry["req_ts"] = pkt.timestamp_us
                 elif msg_type == _STUN_BINDING_RESPONSE:
                     entry["resp"] = True
+                    if entry["resp_ts"] is None:
+                        entry["resp_ts"] = pkt.timestamp_us
 
         # ── DTLS: parse all records (handles coalesced payloads
         #    and both 1.2 plaintext + 1.3 unified headers) ────────
@@ -371,13 +387,23 @@ def analyze_session(packets: list[Packet], session_id: str) -> SessionAnalysis:
                         dtls_hs_directions.append(direction)
                         if rec.hs_type is not None:
                             cleartext_hs_types.add(rec.hs_type)
+                        if first_dtls_hs_ts is None:
+                            first_dtls_hs_ts = pkt.timestamp_us
                 elif rec.content_type == _DTLS_APP_DATA:
                     dtls_app_record_lens.append(rec.record_len)
 
-    # ── ICE / STUN RTTs ─────────────────────────────────────────
-    result.stun_rtts = sum(
-        1 for t in stun_txns.values() if t["req"] and t["resp"]
-    )
+    # ── ICE / STUN: only the first completed transaction is the
+    #    ICE connectivity check.  The rest are consent/triggered. ─
+    completed = [
+        t for t in stun_txns.values()
+        if t["req"] and t["resp"] and t["resp_ts"] is not None
+    ]
+    completed.sort(key=lambda t: t["resp_ts"])
+    ice_check_count = len(completed)
+
+    # The ICE connectivity check is 1 RTT.  Additional completed
+    # transactions are consent checks that don't add serial RTTs.
+    result.stun_rtts = 1 if ice_check_count >= 1 else 0
 
     # ── DTLS version detection ──────────────────────────────────
     dtls12_indicators = {
@@ -402,13 +428,37 @@ def analyze_session(packets: list[Packet], session_id: str) -> SessionAnalysis:
             last_dir = d
     result.dtls_rtts = max(0, (hs_flights + 1) // 2)
 
+    # ── ICE/DTLS overlap detection ──────────────────────────────
+    # If the first DTLS HS packet arrives within 5ms of the first
+    # completed STUN response, the browser sent the ClientHello
+    # concurrently with (or immediately after) the STUN check.
+    # In that case ICE + first DTLS flight share 1 RTT.
+    _OVERLAP_THRESHOLD_US = 5000  # 5ms
+    ice_dtls_overlap = False
+    if completed and first_dtls_hs_ts is not None:
+        first_resp_ts = completed[0]["resp_ts"]
+        gap = first_dtls_hs_ts - first_resp_ts
+        # DTLS CH arrived before or within threshold after first STUN resp
+        if gap <= _OVERLAP_THRESHOLD_US:
+            ice_dtls_overlap = True
+
     # ── SCTP RTTs (COOKIE-ACK fingerprint) ──────────────────────
     first_app = dtls_app_record_lens[:8]
     result.sctp_handshake = any(rl <= 44 for rl in first_app)
     result.sctp_rtts = 2 if result.sctp_handshake else 0
 
     # ── Total RTTs ──────────────────────────────────────────────
-    result.total_rtts = result.stun_rtts + result.dtls_rtts + result.sctp_rtts
+    if ice_dtls_overlap:
+        # ICE and DTLS first flight are parallel: count as
+        # max(ice, dtls_first_flight) instead of sum.
+        # The first DTLS flight is 1 RTT, ICE check is 1 RTT,
+        # but they overlap, so together = 1 RTT.
+        # Any additional DTLS flights (HVR/HRR) are sequential.
+        overlap_rtts = 1  # combined ICE + first DTLS flight
+        extra_dtls = max(0, result.dtls_rtts - 1)  # HVR/HRR flights
+        result.total_rtts = overlap_rtts + extra_dtls + result.sctp_rtts
+    else:
+        result.total_rtts = result.stun_rtts + result.dtls_rtts + result.sctp_rtts
 
     # ── Phase summary (second pass using computed results) ──────
     phases: list[str] = []
