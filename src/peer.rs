@@ -7,7 +7,7 @@ use str0m::{
     Candidate, Event, Input, Output, Rtc, RtcConfig,
     change::{SdpAnswer, SdpOffer, SdpPendingOffer},
     channel::ChannelId,
-    config::DtlsCert,
+    config::{DtlsCert, DtlsVersion},
     net::{Protocol, Receive},
 };
 use tokio::{net::UdpSocket, sync::oneshot};
@@ -54,6 +54,10 @@ impl Peer {
         let local_addr = socket.local_addr()?;
 
         let mut config = RtcConfig::new().set_snap_enabled(true);
+        #[cfg(any(feature = "aws-lc-rs", feature = "rust-crypto"))]
+        {
+            config = config.set_dtls_version(DtlsVersion::Auto);
+        }
         if ice_lite {
             config = config.set_ice_lite(true);
         }

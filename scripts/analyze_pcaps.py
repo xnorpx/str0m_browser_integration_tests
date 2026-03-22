@@ -109,35 +109,165 @@ def parse_ipv4_udp(frame: bytes, timestamp_us: int) -> Packet | None:
 # Protocol identification
 # ---------------------------------------------------------------------------
 
+# STUN constants
+_STUN_BINDING_REQUEST = 0x0001
+_STUN_BINDING_RESPONSE = 0x0101
+_STUN_MAGIC = 0x2112A442
+
+# DTLS content types
+_DTLS_CCS = 20
+_DTLS_ALERT = 21
+_DTLS_HANDSHAKE = 22
+_DTLS_APP_DATA = 23
+
+# DTLS handshake message types (cleartext, epoch 0)
+_HS_CLIENT_HELLO = 1
+_HS_SERVER_HELLO = 2
+_HS_HELLO_VERIFY_REQUEST = 3
+_HS_CERTIFICATE = 11
+_HS_SERVER_KEY_EXCHANGE = 12
+_HS_SERVER_HELLO_DONE = 14
+_HS_CLIENT_KEY_EXCHANGE = 16
+
+
 def classify_packet(payload: bytes) -> str:
-    """Classify a packet's protocol layer."""
+    """Classify a packet's top-level protocol layer (first byte)."""
     if not payload:
         return "empty"
     first = payload[0]
 
-    # STUN messages start with 0x00 or 0x01
     if first in (0x00, 0x01) and len(payload) >= 20:
         msg_type = struct.unpack_from(">H", payload, 0)[0]
-        if msg_type == 0x0001:
+        if msg_type == _STUN_BINDING_REQUEST:
             return "STUN-REQ"
-        elif msg_type == 0x0101:
+        elif msg_type == _STUN_BINDING_RESPONSE:
             return "STUN-RESP"
-        else:
-            return "STUN-OTHER"
+        return "STUN-OTHER"
 
-    # DTLS record layer: content types 20-25
+    # DTLS 1.2 plaintext record layer: content types 20-25
     if 20 <= first <= 25:
-        if first == 20:
+        if first == _DTLS_CCS:
             return "DTLS-CCS"
-        elif first == 22:
+        elif first == _DTLS_HANDSHAKE:
             return "DTLS-HS"
-        elif first == 23:
+        elif first == _DTLS_APP_DATA:
             return "DTLS-APP"
-        elif first == 21:
+        elif first == _DTLS_ALERT:
             return "DTLS-ALERT"
         return "DTLS-OTHER"
 
+    # DTLS 1.3 unified header (RFC 9147 Section 4):
+    # Fixed bits 001xxxxx -> byte range 0x20-0x3F
+    # Epoch in low 2 bits: epoch 2 = encrypted HS, epoch 3 = app data
+    if 0x20 <= first <= 0x3F:
+        epoch = first & 0x03
+        if epoch == 2:
+            return "DTLS13-HS"   # encrypted handshake (Finished, etc.)
+        elif epoch == 3:
+            return "DTLS13-APP"  # encrypted application data (SCTP)
+        return "DTLS13-OTHER"
+
     return "OTHER"
+
+
+def parse_stun_txn_id(payload: bytes) -> str | None:
+    """Extract the 12-byte STUN transaction ID as a hex string."""
+    if len(payload) < 20:
+        return None
+    magic = struct.unpack_from(">I", payload, 4)[0]
+    if magic != _STUN_MAGIC:
+        return None
+    return payload[8:20].hex()
+
+
+@dataclass
+class DtlsRecord:
+    """A single DTLS record parsed from a UDP payload."""
+    content_type: int    # 20-25
+    epoch: int
+    record_len: int
+    hs_type: int | None = None   # set for cleartext HS records (epoch 0, ct 22)
+
+
+def parse_dtls_records(payload: bytes) -> list[DtlsRecord]:
+    """Parse all DTLS records from a UDP payload.
+
+    Handles both DTLS 1.2 plaintext record layer (content types 20-25)
+    and DTLS 1.3 unified header (0x20-0x3F, RFC 9147 Section 4).
+
+    A single UDP datagram can carry multiple coalesced records, e.g.
+    CCS + encrypted Finished + APP data.  Parsing all of them is
+    essential for correct SCTP-handshake detection in SNAP sessions
+    where the first APP record is coalesced with the last DTLS flight.
+    """
+    records: list[DtlsRecord] = []
+    off = 0
+    while off < len(payload):
+        if off + 1 > len(payload):
+            break
+        first = payload[off]
+
+        # DTLS 1.2 plaintext record: ct(1) + version(2) + epoch(2) + seq(6) + length(2) = 13 bytes
+        if 20 <= first <= 25:
+            if off + 13 > len(payload):
+                break
+            ct = first
+            epoch = struct.unpack_from(">H", payload, off + 3)[0]
+            rec_len = struct.unpack_from(">H", payload, off + 11)[0]
+            rec_data = payload[off + 13 : off + 13 + rec_len]
+
+            rec = DtlsRecord(content_type=ct, epoch=epoch, record_len=rec_len)
+            if ct == _DTLS_HANDSHAKE and epoch == 0 and len(rec_data) >= 12:
+                rec.hs_type = rec_data[0]
+
+            records.append(rec)
+            off += 13 + rec_len
+            continue
+
+        # DTLS 1.3 unified header (RFC 9147 Section 4):
+        # Fixed bits: 001CSLEE
+        #   C = Connection ID present
+        #   S = Sequence number length (0=8bit, 1=16bit)
+        #   L = Length present
+        #   EE = Epoch low 2 bits
+        if 0x20 <= first <= 0x3F:
+            epoch = first & 0x03
+            has_cid = bool(first & 0x10)
+            seq_16bit = bool(first & 0x08)
+            has_length = bool(first & 0x04)
+
+            hdr_len = 1  # first byte
+            if has_cid:
+                break  # CID length is variable, can't parse without context
+            hdr_len += 2 if seq_16bit else 1  # sequence number
+
+            if has_length:
+                if off + hdr_len + 2 > len(payload):
+                    break
+                rec_len = struct.unpack_from(">H", payload, off + hdr_len)[0]
+                hdr_len += 2
+            else:
+                # No length field: rest of UDP payload is this record
+                rec_len = len(payload) - off - hdr_len
+
+            # Map epoch to equivalent content type for analysis
+            if epoch == 2:
+                ct = _DTLS_HANDSHAKE  # encrypted handshake
+            elif epoch == 3:
+                ct = _DTLS_APP_DATA   # application data
+            else:
+                ct = _DTLS_APP_DATA   # other epochs treated as APP
+
+            records.append(DtlsRecord(
+                content_type=ct, epoch=epoch, record_len=rec_len,
+            ))
+            off += hdr_len + rec_len
+            continue
+
+        # Not a DTLS record
+        break
+
+    return records
 
 
 # ---------------------------------------------------------------------------
@@ -153,18 +283,43 @@ class SessionAnalysis:
     test_type: str = ""        # "base", "snap", "sped", "warp"
     test_role: str = ""        # "offerer_active_lite", etc.
     total_packets: int = 0
-    stun_rtts: int = 0         # STUN request/response pairs (ICE)
-    dtls_flights: int = 0      # DTLS-HS direction changes
-    dtls_rtts: float = 0       # Estimated DTLS handshake RTTs
-    sctp_flights: int = 0      # SCTP handshake flights (inside DTLS-APP)
-    sctp_rtts: float = 0       # Estimated SCTP handshake RTTs
+    stun_rtts: int = 0         # Unique completed STUN transactions (ICE)
+    dtls_version: str = ""     # "1.2", "1.3", or "unknown"
+    dtls_has_hvr: bool = False # HelloVerifyRequest observed
+    dtls_rtts: float = 0       # DTLS handshake RTTs
+    sctp_handshake: bool = False  # SCTP 4-way handshake detected
+    sctp_rtts: float = 0       # SCTP handshake RTTs (2 or 0)
     total_rtts: float = 0      # STUN + DTLS + SCTP RTTs
     phases: list[str] = field(default_factory=list)
     error: str = ""
 
 
 def analyze_session(packets: list[Packet], session_id: str) -> SessionAnalysis:
-    """Analyze a session's packets and count RTTs."""
+    """Analyze a session's packets and count RTTs per protocol phase.
+
+    ICE (STUN):
+      Matches STUN Binding requests to responses by transaction ID.
+      Each unique completed transaction = 1 ICE RTT.
+
+    DTLS handshake:
+      Detects DTLS version from cleartext handshake messages:
+        - Certificate / ServerKeyExchange visible  -> DTLS 1.2
+        - Only ClientHello / ServerHello visible   -> DTLS 1.3
+      Counts direction changes among DTLS-HS records; each pair of
+      opposing flights = 1 RTT.  Works correctly for both versions:
+        - DTLS 1.2 w/o HVR: CH -> SH..SHD -> Cert..Fin -> CCS+Fin = 2 RTTs
+        - DTLS 1.2 w/  HVR: + CH -> HVR extra flight          = 3 RTTs
+        - DTLS 1.3 w/o HVR: CH -> SH (rest encrypted)         = 1 RTT
+        - DTLS 1.3 w/  HVR: + CH -> HRR extra flight           = 2 RTTs
+
+    SCTP handshake:
+      With SNAP the 4-way handshake (INIT/INIT-ACK/COOKIE-ECHO/COOKIE-ACK)
+      is skipped entirely.  Detection uses the SCTP COOKIE-ACK fingerprint:
+      it always produces a DTLS-APP record of ~40 bytes (16-byte SCTP
+      payload + AEAD overhead).  No other SCTP message is that small.
+      If record_len <= 44 appears among the first 8 APP records, the
+      handshake is present (2 RTTs); otherwise it was skipped (0 RTTs).
+    """
     result = SessionAnalysis(session_id=session_id)
     result.total_packets = len(packets)
 
@@ -172,70 +327,97 @@ def analyze_session(packets: list[Packet], session_id: str) -> SessionAnalysis:
         result.error = "no packets"
         return result
 
-    # Determine server address from first packet's src
     server_addr = (packets[0].src_ip, packets[0].src_port)
 
-    # Classify all packets with direction
-    classified = []
+    # ── Pass 1: extract protocol details from every packet ───────
+    stun_txns: dict[str, dict[str, bool]] = {}  # txn_id -> {req, resp}
+    cleartext_hs_types: set[int] = set()
+    dtls_hs_directions: list[str] = []    # direction per HS record
+    dtls_app_record_lens: list[int] = []  # record_len of every APP record
+    pkt_top_protos: list[str] = []        # top-level proto per packet
+
     for pkt in packets:
-        proto = classify_packet(pkt.payload)
-        is_outgoing = (pkt.src_ip, pkt.src_port) == server_addr
-        direction = "->" if is_outgoing else "<-"
-        classified.append((pkt, proto, direction))
+        payload = pkt.payload
+        if not payload:
+            pkt_top_protos.append("empty")
+            continue
 
-    # Count STUN request/response pairs
-    stun_requests = 0
-    stun_responses = 0
-    for _, proto, _ in classified:
-        if proto == "STUN-REQ":
-            stun_requests += 1
-        elif proto == "STUN-RESP":
-            stun_responses += 1
-    result.stun_rtts = min(stun_requests, stun_responses)
+        direction = "->" if (pkt.src_ip, pkt.src_port) == server_addr else "<-"
+        top_proto = classify_packet(payload)
+        pkt_top_protos.append(top_proto)
+        first = payload[0]
 
-    # Count DTLS handshake flights (direction changes in DTLS-HS packets)
-    dtls_hs_packets = [(p, d) for p, proto, d in classified if proto == "DTLS-HS"]
-    flights = 0
+        # ── STUN: track transactions by ID ──────────────────────
+        if first in (0x00, 0x01) and len(payload) >= 20:
+            msg_type = struct.unpack_from(">H", payload, 0)[0]
+            txn = parse_stun_txn_id(payload)
+            if txn:
+                entry = stun_txns.setdefault(txn, {"req": False, "resp": False})
+                if msg_type == _STUN_BINDING_REQUEST:
+                    entry["req"] = True
+                elif msg_type == _STUN_BINDING_RESPONSE:
+                    entry["resp"] = True
+
+        # ── DTLS: parse all records (handles coalesced payloads
+        #    and both 1.2 plaintext + 1.3 unified headers) ────────
+        elif (20 <= first <= 25) or (0x20 <= first <= 0x3F):
+            for rec in parse_dtls_records(payload):
+                if rec.content_type == _DTLS_HANDSHAKE:
+                    # Only count epoch-0 (cleartext) HS records for
+                    # direction-change / RTT counting.  Encrypted HS
+                    # records (epoch 1 in DTLS 1.2, epoch 2 in DTLS 1.3)
+                    # are fire-and-forget continuations that don't add RTTs.
+                    if rec.epoch == 0:
+                        dtls_hs_directions.append(direction)
+                        if rec.hs_type is not None:
+                            cleartext_hs_types.add(rec.hs_type)
+                elif rec.content_type == _DTLS_APP_DATA:
+                    dtls_app_record_lens.append(rec.record_len)
+
+    # ── ICE / STUN RTTs ─────────────────────────────────────────
+    result.stun_rtts = sum(
+        1 for t in stun_txns.values() if t["req"] and t["resp"]
+    )
+
+    # ── DTLS version detection ──────────────────────────────────
+    dtls12_indicators = {
+        _HS_CERTIFICATE, _HS_SERVER_KEY_EXCHANGE,
+        _HS_SERVER_HELLO_DONE, _HS_CLIENT_KEY_EXCHANGE,
+    }
+    result.dtls_has_hvr = _HS_HELLO_VERIFY_REQUEST in cleartext_hs_types
+
+    if cleartext_hs_types & dtls12_indicators:
+        result.dtls_version = "1.2"
+    elif _HS_CLIENT_HELLO in cleartext_hs_types:
+        result.dtls_version = "1.3"
+    else:
+        result.dtls_version = "unknown"
+
+    # ── DTLS RTTs (direction-change counting) ───────────────────
+    hs_flights = 0
     last_dir = None
-    for _, d in dtls_hs_packets:
+    for d in dtls_hs_directions:
         if d != last_dir:
-            flights += 1
+            hs_flights += 1
             last_dir = d
-    result.dtls_flights = flights
-    result.dtls_rtts = max(0, (flights + 1) // 2)
+    result.dtls_rtts = max(0, (hs_flights + 1) // 2)
 
-    # Separate SCTP handshake from data inside DTLS-APP.
-    # SCTP 4-way: INIT -> INIT-ACK <- COOKIE-ECHO -> COOKIE-ACK <-
-    # These are the first 4 DTLS-APP packets with alternating directions.
-    # After that comes DCEP open/ack, then user data.
-    dtls_app_packets = [(p, d) for p, proto, d in classified if proto == "DTLS-APP"]
+    # ── SCTP RTTs (COOKIE-ACK fingerprint) ──────────────────────
+    first_app = dtls_app_record_lens[:8]
+    result.sctp_handshake = any(rl <= 44 for rl in first_app)
+    result.sctp_rtts = 2 if result.sctp_handshake else 0
 
-    # Count SCTP handshake flights: direction changes in the first 4 DTLS-APP
-    # packets (the 4-way handshake). Any additional early alternations before
-    # data bursts are DCEP negotiation.
-    sctp_hs_count = min(4, len(dtls_app_packets))
-    sctp_flights = 0
-    last_dir = None
-    for _, d in dtls_app_packets[:sctp_hs_count]:
-        if d != last_dir:
-            sctp_flights += 1
-            last_dir = d
-    result.sctp_flights = sctp_flights
-    result.sctp_rtts = max(0, (sctp_flights + 1) // 2)
-
-    # Total RTTs
+    # ── Total RTTs ──────────────────────────────────────────────
     result.total_rtts = result.stun_rtts + result.dtls_rtts + result.sctp_rtts
 
-    # Build phase summary
-    phases = []
-    current_phase = None
+    # ── Phase summary (second pass using computed results) ──────
+    phases: list[str] = []
+    current_phase: str | None = None
     app_idx = 0
-    for _, proto, _ in classified:
-        if proto == "DTLS-APP":
-            if app_idx < sctp_hs_count:
-                phase = "SCTP"
-            else:
-                phase = "DATA"
+    sctp_zone = 4 if result.sctp_handshake else 0
+    for proto in pkt_top_protos:
+        if proto in ("DTLS-APP", "DTLS13-APP"):
+            phase = "SCTP" if app_idx < sctp_zone else "DATA"
             app_idx += 1
         elif proto.startswith("DTLS"):
             phase = "DTLS"
@@ -320,20 +502,22 @@ def generate_markdown_table(results: list[SessionAnalysis]) -> str:
     """Generate a markdown table summarizing all sessions."""
     lines = []
     lines.append("## Connection RTT Analysis\n")
-    lines.append("| Platform | Crypto | Browser | Test | Role | STUN RTTs | DTLS RTTs | SCTP RTTs | Total RTTs | Packets | Phases |")
-    lines.append("|----------|--------|---------|------|------|-----------|-----------|-----------|------------|---------|--------|")
+    lines.append("| Platform | Crypto | Browser | Test | Role | STUN RTTs | DTLS Ver | DTLS RTTs | SCTP RTTs | Total RTTs | Packets | Phases |")
+    lines.append("|----------|--------|---------|------|------|-----------|----------|-----------|-----------|------------|---------|--------|")
 
     sorted_results = sorted(results, key=_sort_key)
 
     for r in sorted_results:
         if r.error:
-            lines.append(f"| {r.platform} | {r.crypto} | {r.browser} | {r.test_type} | {r.test_role} | - | - | - | - | {r.total_packets} | {r.error} |")
+            lines.append(f"| {r.platform} | {r.crypto} | {r.browser} | {r.test_type} | {r.test_role} | - | - | - | - | - | {r.total_packets} | {r.error} |")
         else:
             phases_str = " -> ".join(r.phases)
+            hvr = " +HVR" if r.dtls_has_hvr else ""
+            snap = "" if r.sctp_handshake else " (SNAP)"
             lines.append(
                 f"| {r.platform} | {r.crypto} | {r.browser} | {r.test_type} | {r.test_role} "
-                f"| {r.stun_rtts} | {r.dtls_rtts:.0f} | {r.sctp_rtts:.0f} | {r.total_rtts:.0f} "
-                f"| {r.total_packets} | {phases_str} |"
+                f"| {r.stun_rtts} | {r.dtls_version}{hvr} | {r.dtls_rtts:.0f} | {r.sctp_rtts:.0f}{snap} "
+                f"| {r.total_rtts:.0f} | {r.total_packets} | {phases_str} |"
             )
 
     lines.append("")
