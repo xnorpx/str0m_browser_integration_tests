@@ -53,7 +53,7 @@ impl Peer {
         let socket = UdpSocket::from_std(std_socket)?;
         let local_addr = socket.local_addr()?;
 
-        let mut config = RtcConfig::new();
+        let mut config = RtcConfig::new().set_snap_enabled(true);
         if ice_lite {
             config = config.set_ice_lite(true);
         }
