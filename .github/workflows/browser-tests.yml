@@ -104,8 +104,6 @@ jobs:
           - { name: "Base · Chrome",  script: "test:chrome" }
           - { name: "Base · Edge",    script: "test:edge" }
           - { name: "Base · Firefox", script: "test:firefox" }
-          - { name: "SPED · Chrome",  script: "test:sped:chrome" }
-          - { name: "SPED · Edge",    script: "test:sped:edge" }
           - { name: "SNAP · Chrome",  script: "test:snap:chrome" }
           - { name: "WARP · Chrome",  script: "test:warp:chrome" }
         exclude:
@@ -120,9 +118,7 @@ jobs:
           - { os: macos-latest,   crypto: wincrypto }
           # wincrypto + Firefox: SChannel DTLS cipher mismatch
           - { crypto: wincrypto, test: { name: "Base \xb7 Firefox", script: "test:firefox" } }
-          # wincrypto + SPED/WARP: SChannel can't handle SPED-embedded DTLS ClientHello
-          - { crypto: wincrypto, test: { name: "SPED · Chrome",  script: "test:sped:chrome" } }
-          - { crypto: wincrypto, test: { name: "SPED · Edge",    script: "test:sped:edge" } }
+          # wincrypto + WARP: SChannel doesn't support DTLS 1.3
           - { crypto: wincrypto, test: { name: "WARP · Chrome",  script: "test:warp:chrome" } }
         # Map OS to labels, slugs, and binary names
         include:

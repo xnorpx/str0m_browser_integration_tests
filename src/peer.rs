@@ -38,7 +38,7 @@ impl Peer {
         adv_addr: IpAddr,
         udp_port: u16,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        Self::with_cert(ice_lite, adv_addr, udp_port, None)
+        Self::with_cert(ice_lite, adv_addr, udp_port, None, true)
     }
 
     pub fn with_cert(
@@ -46,6 +46,7 @@ impl Peer {
         adv_addr: IpAddr,
         udp_port: u16,
         cert: Option<&DtlsCert>,
+        snap_enabled: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let udp_socket = std::net::UdpSocket::bind(SocketAddr::new(adv_addr, udp_port))?;
         let std_socket = udp_socket;
@@ -53,7 +54,7 @@ impl Peer {
         let socket = UdpSocket::from_std(std_socket)?;
         let local_addr = socket.local_addr()?;
 
-        let mut config = RtcConfig::new().set_snap_enabled(true);
+        let mut config = RtcConfig::new().set_snap_enabled(snap_enabled);
         #[cfg(any(feature = "aws-lc-rs", feature = "rust-crypto"))]
         {
             config = config.set_dtls_version(DtlsVersion::Auto);

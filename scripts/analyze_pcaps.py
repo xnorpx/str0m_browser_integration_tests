@@ -280,7 +280,7 @@ class SessionAnalysis:
     browser: str = ""
     platform: str = ""
     crypto: str = ""
-    test_type: str = ""        # "base", "snap", "sped", "warp"
+    test_type: str = ""        # "base", "snap", "warp"
     test_role: str = ""        # "offerer_active_lite", etc.
     total_packets: int = 0
     stun_rtts: int = 0         # Unique completed STUN transactions (ICE)
@@ -439,11 +439,20 @@ def parse_session_id(session_id: str, platform: str, crypto: str, is_native: boo
 
     # Native tests have no browser prefix.
     # Session IDs: offerer_active_lite, answerer_active_full, etc.
+    # SNAP tests:  snap_on_offerer_active_lite, snap_off_answerer_active_lite
     if is_native:
+        test_type = "base"
+        role = "_".join(parts)
+
+        native_features = {"snap_on", "snap_off"}
+        if len(parts) >= 2 and f"{parts[0]}_{parts[1]}" in native_features:
+            test_type = f"{parts[0]}_{parts[1]}"
+            role = "_".join(parts[2:]) if len(parts) > 2 else "unknown"
+
         return {
             "browser": "native",
-            "test_type": "base",
-            "role": "_".join(parts),
+            "test_type": test_type,
+            "role": role,
             "platform": platform,
             "crypto": crypto,
         }
@@ -453,9 +462,9 @@ def parse_session_id(session_id: str, platform: str, crypto: str, is_native: boo
     # Base test IDs: {browser}_{role}_{dtls}_{ice}
     # e.g. chrome_offerer_active_lite
     # WARP test IDs: {browser}_{feature}_{role}
-    # e.g. chrome_sped_snap_offerer
+    # e.g. chrome_snap_snap_offerer
 
-    known_features = {"snap", "sped", "warp"}
+    known_features = {"snap", "warp"}
 
     test_type = "base"
     role = "_".join(parts[1:]) if len(parts) > 1 else "unknown"

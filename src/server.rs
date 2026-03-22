@@ -157,7 +157,7 @@ fn handle_client_message(
             let ice_lite = config.server_ice_mode == IceMode::Lite;
             let udp_port = udp_ports.next_port();
             let cert = crate::shared_dtls_cert();
-            let mut peer = match Peer::with_cert(ice_lite, adv_addr, udp_port, Some(cert)) {
+            let mut peer = match Peer::with_cert(ice_lite, adv_addr, udp_port, Some(cert), true) {
                 Ok(p) => p,
                 Err(e) => {
                     return (

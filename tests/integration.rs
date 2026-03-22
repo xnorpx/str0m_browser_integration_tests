@@ -68,6 +68,10 @@ async fn connect_ws(
 use str0m_browser_integration_tests::client;
 
 async fn run_connect_and_verify(test_name: &str, config: SessionConfig) {
+    run_connect_and_verify_snap(test_name, config, true).await;
+}
+
+async fn run_connect_and_verify_snap(test_name: &str, config: SessionConfig, snap_enabled: bool) {
     init();
 
     let ws_port = alloc_ws_port();
@@ -85,7 +89,8 @@ async fn run_connect_and_verify(test_name: &str, config: SessionConfig) {
     assert_eq!(session_id, sid);
 
     let cert = str0m_browser_integration_tests::shared_dtls_cert();
-    let mut client_peer = Peer::with_cert(false, LOCALHOST, 0, Some(cert)).expect("client peer");
+    let mut client_peer =
+        Peer::with_cert(false, LOCALHOST, 0, Some(cert), snap_enabled).expect("client peer");
 
     match config.client_sdp_role {
         SdpRole::Offerer => {
@@ -276,6 +281,66 @@ async fn browser_answerer_dtls_active_ice_full() {
             server_ice_mode: IceMode::Full,
             client_dtls_role: DtlsRole::Active,
         },
+    )
+    .await;
+}
+
+// ---------------------------------------------------------------------------
+// SNAP tests: verify connection with SNAP enabled and disabled (native only)
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn snap_on_offerer_active_lite() {
+    run_connect_and_verify_snap(
+        "snap_on_offerer_active_lite",
+        SessionConfig {
+            client_sdp_role: SdpRole::Offerer,
+            server_ice_mode: IceMode::Lite,
+            client_dtls_role: DtlsRole::Active,
+        },
+        true,
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn snap_off_offerer_active_lite() {
+    run_connect_and_verify_snap(
+        "snap_off_offerer_active_lite",
+        SessionConfig {
+            client_sdp_role: SdpRole::Offerer,
+            server_ice_mode: IceMode::Lite,
+            client_dtls_role: DtlsRole::Active,
+        },
+        false,
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn snap_on_answerer_active_lite() {
+    run_connect_and_verify_snap(
+        "snap_on_answerer_active_lite",
+        SessionConfig {
+            client_sdp_role: SdpRole::Answerer,
+            server_ice_mode: IceMode::Lite,
+            client_dtls_role: DtlsRole::Active,
+        },
+        true,
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn snap_off_answerer_active_lite() {
+    run_connect_and_verify_snap(
+        "snap_off_answerer_active_lite",
+        SessionConfig {
+            client_sdp_role: SdpRole::Answerer,
+            server_ice_mode: IceMode::Lite,
+            client_dtls_role: DtlsRole::Active,
+        },
+        false,
     )
     .await;
 }

@@ -1,28 +1,20 @@
 /**
- * Karma configuration for WARP / SNAP / SPED feature tests.
+ * Karma configuration for SNAP / WARP feature tests.
  *
  * These tests enable experimental WebRTC features via Chromium field trials
- * and verify that str0m can still complete a full connection. The pcap captures
- * will show evidence of the experimental protocols in action.
+ * and verify that str0m can complete a full connection with SNAP enabled.
  *
  * Features:
  *   SNAP  - SCTP Negotiation Acceleration Protocol (WebRTC-Sctp-Snap)
- *   SPED  - STUN Protocol for Embedding DTLS (WebRTC-IceHandshakeDtls)
- *   WARP  - SNAP + SPED combined (WebRTC Accelerated Rendezvous Protocol)
+ *   WARP  - SNAP + DTLS 1.3 combined
  *
  * Usage:
- *   npm run test:snap:chrome                    # SNAP on Chrome (Chrome-only)
- *   npm run test:sped:edge                      # SPED on Edge
- *   npm run test:sped:chrome                    # SPED on Chrome
- *   npm run test:warp:chrome                    # WARP on Chrome (Chrome-only, SNAP+SPED)
+ *   npm run test:snap:chrome                    # SNAP on Chrome
+ *   npm run test:warp:chrome                    # WARP on Chrome (SNAP + DTLS 1.3)
  *
  * Note: DTLS 1.3 (RFC 9147) is enabled by default in Chrome/Edge since
  *       Oct 2025 (issues.webrtc.org/383141571) - the base tests already
- *       exercise it, so no separate test is needed.
- *
- * str0m does NOT currently implement SNAP or SPED, so these tests are
- * expected to fail until server-side support is added. The pcap captures
- * are the primary deliverable - they show what the browser attempts.
+ *       exercise it when using aws-lc-rs or rust-crypto backends.
  */
 
 const webpackConfig = require('./webpack.config');
@@ -31,7 +23,6 @@ let feature = (process.env.WARP_FEATURE || '').toLowerCase();
 
 const FEATURE_BROWSERS = {
   snap: { chrome: 'ChromeHeadlessSNAP' },
-  sped: { chrome: 'ChromeHeadlessSPED', edge: 'EdgeHeadlessSPED' },
   warp: { chrome: 'ChromeHeadlessWARP' },
 };
 
@@ -94,21 +85,6 @@ module.exports = function (config) {
           '--disable-features=WebRtcHideLocalIpsWithMdns',
           ...chromeBaseFlags,
           '--force-fieldtrials=WebRTC-Sctp-Snap/Enabled/',
-        ],
-      },
-      ChromeHeadlessSPED: {
-        base: 'ChromeHeadless',
-        flags: [
-          '--disable-features=WebRtcHideLocalIpsWithMdns,WebRtcPqcForDtls',
-          ...chromeBaseFlags,
-          '--force-fieldtrials=WebRTC-IceHandshakeDtls/Enabled/',
-        ],
-      },
-      EdgeHeadlessSPED: {
-        base: 'EdgeHeadless',
-        flags: [
-          '--disable-features=WebRtcPqcForDtls',
-          '--force-fieldtrials=WebRTC-IceHandshakeDtls/Enabled/',
         ],
       },
       ChromeHeadlessWARP: {

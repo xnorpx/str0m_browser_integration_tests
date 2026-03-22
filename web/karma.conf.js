@@ -86,25 +86,6 @@ module.exports = function (config) {
         ],
       },
 
-      ChromeHeadlessSPED: {
-        base: 'ChromeHeadless',
-        flags: [
-          '--disable-features=WebRtcHideLocalIpsWithMdns,WebRtcPqcForDtls',
-          '--disable-background-timer-throttling',
-          '--disable-renderer-backgrounding',
-          '--no-sandbox',
-          '--autoplay-policy=no-user-gesture-required',
-          '--force-fieldtrials=WebRTC-IceHandshakeDtls/Enabled/',
-        ],
-      },
-      EdgeHeadlessSPED: {
-        base: 'EdgeHeadless',
-        flags: [
-          '--disable-features=WebRtcPqcForDtls',
-          '--force-fieldtrials=WebRTC-IceHandshakeDtls/Enabled/',
-        ],
-      },
-
       ChromeHeadlessWARP: {
         base: 'ChromeHeadless',
         flags: [

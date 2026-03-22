@@ -1,34 +1,22 @@
 /**
- * WARP / SNAP / SPED feature tests for str0m browser integration.
+ * SNAP / WARP feature tests for str0m browser integration.
  *
  * These tests exercise experimental WebRTC connection acceleration features:
  *
  *   SNAP  - SCTP Negotiation Acceleration Protocol (draft-hancke-tsvwg-snap)
- *           Sends SCTP INIT/INIT-ACK out-of-band in ICE candidates, allowing
- *           the data channel to open ~1 RTT earlier.
+ *           Removes the SCTP 4-way handshake entirely by exchanging SCTP init
+ *           parameters declaratively in SDP, saving 2 RTTs.
  *           Chromium field trial: WebRTC-Sctp-Snap
  *
- *   SPED  - STUN Protocol for Embedding DTLS (draft-okonkwo-ice-dtlsice)
- *           Embeds the DTLS ClientHello inside the STUN connectivity check,
- *           reducing STUN + DTLS from 2 RTTs to 1 RTT.
- *           Chromium field trial: WebRTC-IceHandshakeDtls
- *
- *   WARP  - WebRTC Accelerated Rendezvous Protocol (SNAP + SPED combined)
- *           Reduces overall connection setup from 4–6 RTTs to 1–2 RTTs.
+ *   WARP  - SNAP + DTLS 1.3 combined for minimal connection setup RTTs.
  *
  * Note: DTLS 1.3 (RFC 9147) is enabled by default in Chrome/Edge since
  * Oct 2025 (issues.webrtc.org/383141571), so the base tests already
- * exercise it - no separate test needed.
- *
- * str0m does NOT implement SNAP or SPED yet, but browsers fall back
- * gracefully to standard handshakes when the server doesn't support
- * them. These tests verify the fallback works correctly.
+ * exercise it when using aws-lc-rs or rust-crypto backends.
  *
  * Run via:
- *   npm run test:snap:chrome   # SNAP on Chrome (Chrome-only)
- *   npm run test:sped:edge     # SPED on Edge
- *   npm run test:sped:chrome   # SPED on Chrome
- *   npm run test:warp:chrome   # WARP on Chrome (Chrome-only, SNAP+SPED)
+ *   npm run test:snap:chrome   # SNAP on Chrome
+ *   npm run test:warp:chrome   # WARP on Chrome (SNAP + DTLS 1.3)
  */
 
 import {SessionConfig, ServerMessage} from './protocol';
@@ -257,25 +245,7 @@ describe('WARP Feature Tests', () => {
     });
   });
 
-  describe('SPED (DTLS-in-STUN embedding)', () => {
-    it('should connect as offerer with SPED enabled', async () => {
-      await runFeatureTest('sped_offerer', {
-        client_sdp_role: 'offerer',
-        server_ice_mode: 'lite',
-        client_dtls_role: 'active',
-      });
-    });
-
-    it('should connect as answerer with SPED enabled', async () => {
-      await runFeatureTest('sped_answerer', {
-        client_sdp_role: 'answerer',
-        server_ice_mode: 'lite',
-        client_dtls_role: 'active',
-      });
-    });
-  });
-
-  describe('WARP (SNAP + SPED combined)', () => {
+  describe('WARP (SNAP + DTLS 1.3)', () => {
     it('should connect as offerer with WARP enabled', async () => {
       await runFeatureTest('warp_offerer', {
         client_sdp_role: 'offerer',
