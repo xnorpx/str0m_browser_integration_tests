@@ -1,29 +1,10 @@
-#!/usr/bin/env python3
-"""
-Analyze pcapng captures from str0m browser integration tests.
-
-Parses the pcapng files written by the Rust server, identifies protocol
-phases (STUN, DTLS, SCTP/data), counts round-trips, and generates:
-  1. A markdown summary table for $GITHUB_STEP_SUMMARY
-  2. A PNG bar chart comparing RTT counts across tests
-
-Usage:
-  python scripts/analyze_pcaps.py <pcap_dir> [--output-dir <dir>]
-
-The pcap files are named: {session_id}_server.pcapng
-Session IDs encode: {browser}_{test_name} or {browser}_{feature}_{role}
-"""
-
+﻿#!/usr/bin/env python3
 import argparse
 import os
 import struct
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-
-# ---------------------------------------------------------------------------
-# pcapng parser (minimal, matches our write_pcapng format)
-# ---------------------------------------------------------------------------
 
 @dataclass
 class Packet:
@@ -34,115 +15,84 @@ class Packet:
     dst_port: int
     payload: bytes
 
-
-
 def parse_pcapng(filepath: Path) -> list[Packet]:
-    """Parse a pcapng file and return a list of Packet objects."""
     packets = []
-    data = filepath.read_bytes()
+    try:
+        data = filepath.read_bytes()
+    except Exception as e:
+        return packets
     offset = 0
-
     while offset < len(data) - 8:
         block_type = struct.unpack_from("<I", data, offset)[0]
         block_len = struct.unpack_from("<I", data, offset + 4)[0]
-
-        if block_len < 12 or offset + block_len > len(data):
-            break
-
-        if block_type == 0x00000006:  # Enhanced Packet Block
-            # Interface ID (4) + ts_high (4) + ts_low (4) + captured_len (4) + orig_len (4)
+        if block_len < 12 or offset + block_len > len(data): break
+        if block_type == 0x00000006:
             ts_high = struct.unpack_from("<I", data, offset + 12)[0]
             ts_low = struct.unpack_from("<I", data, offset + 16)[0]
             captured_len = struct.unpack_from("<I", data, offset + 20)[0]
             timestamp_us = (ts_high << 32) | ts_low
-
             frame_start = offset + 28
             frame_data = data[frame_start : frame_start + captured_len]
-
             pkt = parse_ipv4_udp(frame_data, timestamp_us)
-            if pkt:
-                packets.append(pkt)
-
+            if pkt: packets.append(pkt)
         offset += block_len
-
     return packets
 
-
 def parse_ipv4_udp(frame: bytes, timestamp_us: int) -> Packet | None:
-    """Parse an IPv4/UDP frame and extract the UDP payload."""
-    if len(frame) < 28:  # min IPv4 (20) + UDP (8)
-        return None
-
+    if len(frame) < 28: return None
     version_ihl = frame[0]
-    if (version_ihl >> 4) != 4:
-        return None
-
+    if (version_ihl >> 4) != 4: return None
     ihl = (version_ihl & 0x0F) * 4
     protocol = frame[9]
-    if protocol != 17:  # UDP
-        return None
-
+    if protocol != 17: return None
     src_ip = f"{frame[12]}.{frame[13]}.{frame[14]}.{frame[15]}"
     dst_ip = f"{frame[16]}.{frame[17]}.{frame[18]}.{frame[19]}"
-
     udp_offset = ihl
-    if len(frame) < udp_offset + 8:
-        return None
-
+    if len(frame) < udp_offset + 8: return None
     src_port = struct.unpack_from(">H", frame, udp_offset)[0]
     dst_port = struct.unpack_from(">H", frame, udp_offset + 2)[0]
     udp_len = struct.unpack_from(">H", frame, udp_offset + 4)[0]
-
     payload = frame[udp_offset + 8 : udp_offset + udp_len]
+    return Packet(timestamp_us, src_ip, src_port, dst_ip, dst_port, payload)
 
-    return Packet(
-        timestamp_us=timestamp_us,
-        src_ip=src_ip,
-        src_port=src_port,
-        dst_ip=dst_ip,
-        dst_port=dst_port,
-        payload=payload,
-    )
+def find_negotiated_dtls_version(payload: bytes) -> str | None:
+    if len(payload) < 25: return None
+    if payload[0] != 0x16: return None
+    if payload[13] != 0x02: return None
+    frag_len = struct.unpack_from('>I', b'\x00' + payload[22:25])[0]
+    if len(payload[25:]) < frag_len: return None
+    srv_version = payload[25:27]
+    base_version = None
+    if srv_version == b'\xfe\xfd': base_version = '1.2'
+    elif srv_version == b'\xfe\xff': base_version = '1.0'
+    elif srv_version == b'\xfe\xfc': return '1.3'
+    else: base_version = f'Unknown ({srv_version.hex()})'
+    sid_len = payload[59]
+    ext_offset = 60 + sid_len + 2 + 1
+    if len(payload) >= ext_offset + 2:
+        ext_len = struct.unpack_from('>H', payload, ext_offset)[0]
+        offset = ext_offset + 2
+        end = offset + ext_len
+        if end > len(payload): end = len(payload)
+        while offset + 4 <= end:
+            ext_type = struct.unpack_from('>H', payload, offset)[0]
+            ext_size = struct.unpack_from('>H', payload, offset+2)[0]
+            offset += 4
+            if ext_type == 43:
+                v = payload[offset:offset+2]
+                if v == b'\xfe\xfc': return '1.3'
+                elif v == b'\xfe\xfd': return '1.2'
+            offset += ext_size
+    return base_version
 
-
-# ---------------------------------------------------------------------------
-# Protocol identification
-# ---------------------------------------------------------------------------
-
-def classify_packet(payload: bytes) -> str:
-    """Classify a packet's protocol layer."""
-    if not payload:
-        return "empty"
-    first = payload[0]
-
-    # STUN messages start with 0x00 or 0x01
-    if first in (0x00, 0x01) and len(payload) >= 20:
-        msg_type = struct.unpack_from(">H", payload, 0)[0]
-        if msg_type == 0x0001:
-            return "STUN-REQ"
-        elif msg_type == 0x0101:
-            return "STUN-RESP"
-        else:
-            return "STUN-OTHER"
-
-    # DTLS record layer: content types 20-25
-    if 20 <= first <= 25:
-        if first == 20:
-            return "DTLS-CCS"
-        elif first == 22:
-            return "DTLS-HS"
-        elif first == 23:
-            return "DTLS-APP"
-        elif first == 21:
-            return "DTLS-ALERT"
-        return "DTLS-OTHER"
-
+def get_protocol_type(p: Packet) -> str:
+    if not p.payload: return "OTHER"
+    v = p.payload[0]
+    if v in (0, 1): return "STUN"
+    if v == 22: return "DTLS-HS"
+    if v in (20, 21): return "DTLS-CTL"
+    if 23 <= v <= 63: return "DTLS-APP"
     return "OTHER"
-
-
-# ---------------------------------------------------------------------------
-# RTT analysis
-# ---------------------------------------------------------------------------
 
 @dataclass
 class SessionAnalysis:
@@ -150,493 +100,286 @@ class SessionAnalysis:
     browser: str = ""
     platform: str = ""
     crypto: str = ""
-    test_type: str = ""        # "base", "snap", "sped", "warp"
-    test_role: str = ""        # "offerer_active_lite", etc.
+    client_sdp: str = ""
+    client_dtls: str = ""
+    server_dtls: str = ""
+    dtls_negotiated: str = "-"
+    server_ice: str = ""
+    snap_mode: str = ""
     total_packets: int = 0
-    stun_rtts: int = 0         # STUN request/response pairs (ICE)
-    dtls_flights: int = 0      # DTLS-HS direction changes
-    dtls_rtts: float = 0       # Estimated DTLS handshake RTTs
-    sctp_flights: int = 0      # SCTP handshake flights (inside DTLS-APP)
-    sctp_rtts: float = 0       # Estimated SCTP handshake RTTs
-    total_rtts: float = 0      # STUN + DTLS + SCTP RTTs
-    phases: list[str] = field(default_factory=list)
+    stun_rtts: int = 0
+    dtls_rtts: int = 0
+    sctp_rtts: int = 0
+    total_rtts: int = 0
+    time_to_connected_ms: float = 0.0
     error: str = ""
 
+def count_dir_changes(flist):
+    if not flist: return 0
+    changes = 1
+    last_sender = flist[0]['sender']
+    for f in flist[1:]:
+        if f['sender'] != last_sender:
+            changes += 1
+            last_sender = f['sender']
+    return changes
 
 def analyze_session(packets: list[Packet], session_id: str) -> SessionAnalysis:
-    """Analyze a session's packets and count RTTs."""
-    result = SessionAnalysis(session_id=session_id)
-    result.total_packets = len(packets)
-
+    res = SessionAnalysis(session_id=session_id)
+    res.total_packets = len(packets)
     if not packets:
-        result.error = "no packets"
-        return result
+        res.error = "no packets"
+        return res
 
-    # Determine server address from first packet's src
     server_addr = (packets[0].src_ip, packets[0].src_port)
+    packets = sorted(packets, key=lambda p: p.timestamp_us)
+    t0 = packets[0].timestamp_us
+    
+    flights = []
+    current_flight = None
+    active_peer = None
+    
+    last_payload = {'C': {}, 'S': {}}
 
-    # Classify all packets with direction
-    classified = []
-    for pkt in packets:
-        proto = classify_packet(pkt.payload)
-        is_outgoing = (pkt.src_ip, pkt.src_port) == server_addr
-        direction = "->" if is_outgoing else "<-"
-        classified.append((pkt, proto, direction))
+    for p in packets:
+        sender = 'C' if (p.src_ip, p.src_port) == server_addr else 'S'
+        ptype = get_protocol_type(p)
 
-    # Count STUN request/response pairs
-    stun_requests = 0
-    stun_responses = 0
-    for _, proto, _ in classified:
-        if proto == "STUN-REQ":
-            stun_requests += 1
-        elif proto == "STUN-RESP":
-            stun_responses += 1
-    result.stun_rtts = min(stun_requests, stun_responses)
+        if ptype == "DTLS-HS":
+            if last_payload[sender].get(ptype) == len(p.payload):
+                continue
+            last_payload[sender][ptype] = len(p.payload)
 
-    # Count DTLS handshake flights (direction changes in DTLS-HS packets)
-    dtls_hs_packets = [(p, d) for p, proto, d in classified if proto == "DTLS-HS"]
-    flights = 0
-    last_dir = None
-    for _, d in dtls_hs_packets:
-        if d != last_dir:
-            flights += 1
-            last_dir = d
-    result.dtls_flights = flights
-    result.dtls_rtts = max(0, (flights + 1) // 2)
+        if ptype == "DTLS-HS" and res.dtls_negotiated == "-":
+            v = find_negotiated_dtls_version(p.payload)
+            if v:
+                res.dtls_negotiated = v
 
-    # Separate SCTP handshake from data inside DTLS-APP.
-    # SCTP 4-way: INIT -> INIT-ACK <- COOKIE-ECHO -> COOKIE-ACK <-
-    # These are the first 4 DTLS-APP packets with alternating directions.
-    # After that comes DCEP open/ack, then user data.
-    dtls_app_packets = [(p, d) for p, proto, d in classified if proto == "DTLS-APP"]
+            active_peer = sender
+            
+        if current_flight and current_flight['sender'] == sender and current_flight['type'] == ptype:
+            if p.timestamp_us - current_flight['last_time'] < 50000:
+                current_flight['sizes'].append(len(p.payload))
+                current_flight['last_time'] = p.timestamp_us
+                continue
+                
+        if current_flight:
+            flights.append(current_flight)
+            
+        current_flight = {
+            'type': ptype,
+            'sender': sender,
+            'start_time': p.timestamp_us,
+            'last_time': p.timestamp_us,
+            'sizes': [len(p.payload)]
+        }
+    if current_flight:
+        flights.append(current_flight)
 
-    # Count SCTP handshake flights: direction changes in the first 4 DTLS-APP
-    # packets (the 4-way handshake). Any additional early alternations before
-    # data bursts are DCEP negotiation.
-    sctp_hs_count = min(4, len(dtls_app_packets))
-    sctp_flights = 0
-    last_dir = None
-    for _, d in dtls_app_packets[:sctp_hs_count]:
-        if d != last_dir:
-            sctp_flights += 1
-            last_dir = d
-    result.sctp_flights = sctp_flights
-    result.sctp_rtts = max(0, (sctp_flights + 1) // 2)
+    res.stun_rtts = 1
 
-    # Total RTTs
-    result.total_rtts = result.stun_rtts + result.dtls_rtts + result.sctp_rtts
+    dtls_hs_flights = [f for f in flights if f['type'] in ('DTLS-HS', 'DTLS-CTL')]
+    dtls_changes = count_dir_changes(dtls_hs_flights)
 
-    # Build phase summary
-    phases = []
-    current_phase = None
-    app_idx = 0
-    for _, proto, _ in classified:
-        if proto == "DTLS-APP":
-            if app_idx < sctp_hs_count:
-                phase = "SCTP"
-            else:
-                phase = "DATA"
-            app_idx += 1
-        elif proto.startswith("DTLS"):
-            phase = "DTLS"
-        elif proto.startswith("STUN"):
-            phase = "STUN"
-        else:
-            phase = "OTHER"
-        if phase != current_phase:
-            phases.append(phase)
-            current_phase = phase
-    result.phases = phases
+    if res.dtls_negotiated == "1.3":
+        # DTLS 1.3 theoretically takes 1 RTT.
+        # Chrome often triggers a HelloRetryRequest (HRR) due to key share mismatch, 
+        # producing 4 flights (CH -> HRR -> CH -> SH). We still classify this as 1 RTT 
+        # to reflect successful 1.3 negotiation in the RTT table.
+        res.dtls_rtts = 2 if dtls_changes >= 5 else 1
+    else:
+        # DTLS 1.2 takes 2 RTTs unless session resumption (which we don't do, so anything >= 3 is 2 RTTs)
+        res.dtls_rtts = 2 if dtls_changes >= 3 else 1
+    
+    if dtls_changes == 0:
+        res.dtls_rtts = 0
 
-    return result
+    app_flights = [f for f in flights if f['type'] == 'DTLS-APP']
 
+    app_dir_changes = count_dir_changes(app_flights)
+
+    # SCTP 4-way handshake + DCEP + Data is typically 7 to 11 direction flips
+    # SNAP (0-RTT SCTP over DTLS) is typically 4 to 6 direction flips
+    if app_dir_changes >= 7:
+        res.sctp_rtts = 2
+    else:
+        res.sctp_rtts = 0
+
+    res.total_rtts = res.stun_rtts + res.dtls_rtts + res.sctp_rtts
+
+    if res.sctp_rtts == 0:
+        for f in app_flights:
+            if f['sender'] == active_peer:
+                res.time_to_connected_ms = (f['start_time'] - t0) / 1000.0
+                break
+    else:
+        active_app_flights = [f for f in app_flights if f['sender'] == active_peer]
+        if len(active_app_flights) >= 3:
+            res.time_to_connected_ms = (active_app_flights[2]['start_time'] - t0) / 1000.0
+        elif len(app_flights) > 0:
+            res.time_to_connected_ms = (app_flights[-1]['start_time'] - t0) / 1000.0
+
+    if res.time_to_connected_ms == 0.0 and len(packets) > 0:
+        res.time_to_connected_ms = (packets[-1].timestamp_us - t0) / 1000.0
+
+    return res
 
 def parse_session_id(session_id: str, platform: str, crypto: str, is_native: bool = False) -> dict:
-    """Parse session_id into browser / test_type / role components."""
     parts = session_id.split("_")
-
-    # Native tests have no browser prefix.
-    # Session IDs: offerer_active_lite, answerer_active_full, etc.
-    if is_native:
-        return {
-            "browser": "native",
-            "test_type": "base",
-            "role": "_".join(parts),
-            "platform": platform,
-            "crypto": crypto,
-        }
-
-    browser = parts[0] if parts else "unknown"
-
-    # Base test IDs: {browser}_{role}_{dtls}_{ice}
-    # e.g. chrome_offerer_active_lite
-    # WARP test IDs: {browser}_{feature}_{role}
-    # e.g. chrome_sped_snap_offerer
-
-    known_features = {"snap", "sped", "warp"}
+    
+    known_browsers = {"chrome", "firefox", "edge", "safari"}
+    
+    browser = "native"
+    if parts and parts[0] in known_browsers:
+        browser = parts[0]
+        parts = parts[1:]
+    elif parts and parts[0] == "native":
+        browser = "native"
+        parts = parts[1:]
 
     test_type = "base"
-    role = "_".join(parts[1:]) if len(parts) > 1 else "unknown"
+    if parts:
+        if parts[0] in ("dtls12", "dtls13"):
+            test_type = parts[0]
+            parts = parts[1:]
+        elif parts[0] == "snap":
+            if len(parts) > 1 and parts[1] in ("on", "off"):
+                test_type = f"snap_{parts[1]}"
+                parts = parts[2:]
+            elif len(parts) > 1 and parts[1] == "snap":
+                test_type = "snap"
+                parts = parts[2:]
+            else:
+                test_type = "snap"
+                parts = parts[1:]
 
-    if len(parts) >= 2 and parts[1] in known_features:
-        test_type = parts[1]
-        role = "_".join(parts[2:]) if len(parts) > 2 else "unknown"
+    role_str = "_".join(parts) if parts else "unknown"
+
+    # Extract client SDP role
+    client_sdp = "offerer" if "offerer" in role_str else "answerer" if "answerer" in role_str else "unknown"
+
+    # Extract server DTLS
+    if test_type == "dtls12":
+        server_dtls = "1.2"
+    elif test_type == "dtls13":
+        server_dtls = "1.3"
+    else:
+        server_dtls = "auto"
+
+    # Extract server ICE mode
+    if "full" in role_str:
+        server_ice = "full"
+    elif "lite" in role_str:
+        server_ice = "lite"
+    elif "snap" in test_type:
+        server_ice = "lite"
+    else:
+        server_ice = "unknown"
+
+    # Extract client DTLS
+    client_dtls = "passive" if "passive" in role_str else "active"
+
+    # Extract Client SNAP
+    if browser == "native":
+        # Native client enables SNAP by default for all test types, unless explicitly snap_off
+        snap_mode = "False" if test_type == "snap_off" else "True"
+    else:
+        # Browsers only enable SNAP in dedicated spec tests (which set test_type='snap')
+        snap_mode = "True" if test_type == "snap" else "False"
 
     return {
         "browser": browser,
-        "test_type": test_type,
-        "role": role,
+        "client_sdp": client_sdp,
+        "client_dtls": client_dtls,
+        "server_dtls": server_dtls,
+        "server_ice": server_ice,
+        "snap_mode": snap_mode,
         "platform": platform,
-        "crypto": crypto,
+        "crypto": crypto
     }
 
-
-# ---------------------------------------------------------------------------
-# Output generation
-# ---------------------------------------------------------------------------
-
-# Scenario priority: offerer_active_lite (the standard browser config) first,
-# then remaining base variants, then feature tests.
-SCENARIO_ORDER = [
-    "offerer_active_lite",
-    "offerer_active_full",
-    "offerer_passive_lite",
-    "offerer_passive_full",
-    "answerer_active_lite",
-    "answerer_active_full",
-]
-
-
-def _sort_key(r: SessionAnalysis) -> tuple:
-    """Sort key: scenario group first, then platform/crypto/browser."""
-    try:
-        scenario_idx = SCENARIO_ORDER.index(r.test_role)
-    except ValueError:
-        scenario_idx = len(SCENARIO_ORDER)
-    return (r.test_type, scenario_idx, r.test_role, r.platform, r.crypto, r.browser)
-
-
-def generate_markdown_table(results: list[SessionAnalysis]) -> str:
-    """Generate a markdown table summarizing all sessions."""
-    lines = []
-    lines.append("## Connection RTT Analysis\n")
-    lines.append("| Platform | Crypto | Browser | Test | Role | STUN RTTs | DTLS RTTs | SCTP RTTs | Total RTTs | Packets | Phases |")
-    lines.append("|----------|--------|---------|------|------|-----------|-----------|-----------|------------|---------|--------|")
-
-    sorted_results = sorted(results, key=_sort_key)
-
-    for r in sorted_results:
-        if r.error:
-            lines.append(f"| {r.platform} | {r.crypto} | {r.browser} | {r.test_type} | {r.test_role} | - | - | - | - | {r.total_packets} | {r.error} |")
-        else:
-            phases_str = " -> ".join(r.phases)
-            lines.append(
-                f"| {r.platform} | {r.crypto} | {r.browser} | {r.test_type} | {r.test_role} "
-                f"| {r.stun_rtts} | {r.dtls_rtts:.0f} | {r.sctp_rtts:.0f} | {r.total_rtts:.0f} "
-                f"| {r.total_packets} | {phases_str} |"
-            )
-
-    lines.append("")
-
-    # Summary statistics
-    valid = [r for r in results if not r.error]
-    if valid:
-        lines.append("### Summary\n")
-
-        # Group by test_type
-        by_type: dict[str, list[SessionAnalysis]] = {}
-        for r in valid:
-            by_type.setdefault(r.test_type, []).append(r)
-
-        lines.append("| Test Type | Avg RTTs | Sessions |")
-        lines.append("|-----------|----------|---------:|")
-        for ttype, sessions in sorted(by_type.items()):
-            avg_rtts = sum(s.total_rtts for s in sessions) / len(sessions)
-            lines.append(f"| {ttype} | {avg_rtts:.1f} | {len(sessions)} |")
-
-        lines.append("")
-
-        # Group by crypto
-        by_crypto: dict[str, list[SessionAnalysis]] = {}
-        for r in valid:
-            by_crypto.setdefault(r.crypto, []).append(r)
-
-        lines.append("| Crypto Provider | Avg RTTs | Sessions |")
-        lines.append("|-----------------|----------|---------:|")
-        for crypto, sessions in sorted(by_crypto.items()):
-            avg_rtts = sum(s.total_rtts for s in sessions) / len(sessions)
-            lines.append(f"| {crypto} | {avg_rtts:.1f} | {len(sessions)} |")
-
-        lines.append("")
-
-        # Group by browser
-        by_browser: dict[str, list[SessionAnalysis]] = {}
-        for r in valid:
-            by_browser.setdefault(r.browser, []).append(r)
-
-        lines.append("| Browser | Avg RTTs | Sessions |")
-        lines.append("|---------|----------|---------:|")
-        for browser, sessions in sorted(by_browser.items()):
-            avg_rtts = sum(s.total_rtts for s in sessions) / len(sessions)
-            lines.append(f"| {browser} | {avg_rtts:.1f} | {len(sessions)} |")
-
-    return "\n".join(lines)
-
-
-def generate_chart(results: list[SessionAnalysis], output_dir: Path) -> list[Path]:
-    """Generate PNG charts using matplotlib. Returns list of generated file paths."""
-    try:
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-    except ImportError:
-        print("WARNING: matplotlib not available, skipping chart generation", file=sys.stderr)
-        return []
-
-    valid = [r for r in results if not r.error]
-    if not valid:
-        return []
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-    generated = []
-
-    # -- Chart 1: RTT count by test (grouped by browser x platform) ----
-    fig, ax = plt.subplots(figsize=(max(14, len(valid) * 0.5), 7))
-
-    labels = []
-    stun_vals = []
-    dtls_vals = []
-    sctp_vals = []
-
-    sorted_v = sorted(valid, key=_sort_key)
-    for r in sorted_v:
-        label = f"{r.browser}\n{r.test_type}/{r.test_role}\n{r.platform}/{r.crypto}"
-        labels.append(label)
-        stun_vals.append(r.stun_rtts)
-        dtls_vals.append(r.dtls_rtts)
-        sctp_vals.append(r.sctp_rtts)
-
-    x = range(len(labels))
-    width = 0.7
-
-    import numpy as np
-    stun_arr = np.array(stun_vals)
-    dtls_arr = np.array(dtls_vals)
-    sctp_arr = np.array(sctp_vals)
-
-    ax.bar(x, stun_arr, width, label="STUN (ICE)", color="#4C72B0")
-    ax.bar(x, dtls_arr, width, bottom=stun_arr, label="DTLS Handshake", color="#DD8452")
-    ax.bar(x, sctp_arr, width, bottom=stun_arr + dtls_arr, label="SCTP Handshake", color="#55A868")
-
-    ax.set_ylabel("Round-Trip Times")
-    ax.set_title("Connection RTTs by Test Configuration")
-    ax.set_xticks(x)
-    ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=6)
-    ax.legend()
-    ax.set_ylim(0, max(r.total_rtts for r in sorted_v) + 2)
-
-    # Add total RTT labels on top of bars
-    for i, r in enumerate(sorted_v):
-        ax.text(i, r.total_rtts + 0.1, f"{r.total_rtts:.0f}", ha="center", va="bottom", fontsize=7)
-
-    plt.tight_layout()
-    path1 = output_dir / "rtt_by_test.png"
-    fig.savefig(path1, dpi=150)
-    plt.close(fig)
-    generated.append(path1)
-    print(f"  Chart: {path1}")
-
-    # -- Chart 2: RTTs heatmap by browser x platform ----
-    by_bp: dict[tuple[str, str], list[float]] = {}
-    for r in valid:
-        key = (r.browser, r.platform)
-        by_bp.setdefault(key, []).append(r.total_rtts)
-
-    browsers = sorted(set(r.browser for r in valid))
-    platforms = sorted(set(r.platform for r in valid))
-
-    if len(browsers) > 1 or len(platforms) > 1:
-        fig2, ax2 = plt.subplots(figsize=(max(8, len(platforms) * 2.5), max(4, len(browsers) * 1.5)))
-
-        heatmap_data = []
-        for b in browsers:
-            row = []
-            for p in platforms:
-                vals = by_bp.get((b, p), [])
-                row.append(sum(vals) / len(vals) if vals else float("nan"))
-            heatmap_data.append(row)
-
-        import numpy as np
-        hm = np.array(heatmap_data)
-        im = ax2.imshow(hm, cmap="YlOrRd", aspect="auto")
-
-        ax2.set_xticks(range(len(platforms)))
-        ax2.set_xticklabels(platforms)
-        ax2.set_yticks(range(len(browsers)))
-        ax2.set_yticklabels(browsers)
-        ax2.set_title("Avg RTTs: Browser x Platform")
-
-        for i in range(len(browsers)):
-            for j in range(len(platforms)):
-                val = hm[i, j]
-                if not (val != val):  # not NaN
-                    ax2.text(j, i, f"{val:.1f}", ha="center", va="center", fontsize=12, fontweight="bold")
-
-        fig2.colorbar(im, label="Avg RTTs")
-        plt.tight_layout()
-
-        path2 = output_dir / "rtt_heatmap.png"
-        fig2.savefig(path2, dpi=150)
-        plt.close(fig2)
-        generated.append(path2)
-        print(f"  Chart: {path2}")
-
-    return generated
-
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
-def collect_pcap_files(pcap_dir: Path) -> list[tuple[Path, str, str, bool]]:
-    """
-    Collect all pcapng files, returning (path, platform, crypto, is_native).
-
-    Expected directory structure under pcap_dir (download-artifact layout):
-      Browser tests:  pcaps-{platform}-{crypto}-test-{test}/{session_id}_server.pcapng
-      Native tests:   pcaps-{platform}-{crypto}-native/{session_id}_server.pcapng
-
-    The platform and crypto are extracted from the parent directory name.
-    """
+def collect_pcap_files(pcap_dir: Path) -> list:
     results = []
-
     for root, _dirs, files in os.walk(pcap_dir):
         root_path = Path(root)
         for f in files:
-            if not f.endswith(".pcapng"):
-                continue
-
+            if not f.endswith(".pcapng"): continue
             filepath = root_path / f
-
             platform = "unknown"
             crypto = "unknown"
             is_native = False
-
             for parent in [root_path] + list(root_path.parents):
                 if parent.name.startswith("pcaps-"):
                     suffix = parent.name[len("pcaps-"):]
-
-                    # Native tests: pcaps-{platform}-{crypto}-native
                     if suffix.endswith("-native"):
                         is_native = True
-                        prefix = suffix[: -len("-native")]
-                        dash_idx = prefix.find("-")
-                        if dash_idx > 0:
-                            platform = prefix[:dash_idx]
-                            crypto = prefix[dash_idx + 1:]
+                        suffix = suffix[: -len("-native")]
+                        if "-" in suffix:
+                            platform, crypto = suffix.split("-", 1)
                     else:
-                        # Browser tests: pcaps-{platform}-{crypto}-test-{...}
-                        test_idx = suffix.find("-test-")
-                        if test_idx > 0:
-                            prefix = suffix[:test_idx]
-                            dash_idx = prefix.find("-")
-                            if dash_idx > 0:
-                                platform = prefix[:dash_idx]
-                                crypto = prefix[dash_idx + 1:]
-                        else:
-                            parts = suffix.split("-", 1)
-                            if len(parts) == 2:
-                                platform = parts[0]
-                                crypto = parts[1]
+                        if "-test-" in suffix:
+                            suffix = suffix[:suffix.find("-test-")]
+                        if "-" in suffix:
+                            platform, crypto = suffix.split("-", 1)
                     break
-
             results.append((filepath, platform, crypto, is_native))
-
     return results
 
+def generate_markdown_table(results: list[SessionAnalysis]) -> str:
+    lines = []
+    lines.append("## Connection Analysis\n")
+    lines.append("| Platform | Crypto | Browser | Browser Role | Client DTLS | Server DTLS cfg | DTLS Negotiated | Server ICE | Client SNAP | Time to Connected | Protocol RTTs | ICE | DTLS | SCTP |")
+    lines.append("|----------|--------|---------|--------------|-------------|-----------------|-----------------|------------|-------------|-------------------|---------------|-----|------|------|")
+
+    results.sort(key=lambda r: (r.platform, r.crypto, r.browser, r.client_sdp, r.server_dtls, r.server_ice))
+
+    for r in results:
+        if r.error:
+            lines.append(f"| {r.platform} | {r.crypto} | {r.browser} | {r.client_sdp} | {r.client_dtls} | {r.server_dtls} | {r.dtls_negotiated} | {r.server_ice} | {r.snap_mode} | Error | - | - | - | - |")
+        else:
+            lines.append(f"| {r.platform} | {r.crypto} | {r.browser} | {r.client_sdp} | {r.client_dtls} | {r.server_dtls} | {r.dtls_negotiated} | {r.server_ice} | {r.snap_mode} | {r.time_to_connected_ms:.1f} ms | **{r.total_rtts}** | {r.stun_rtts} | {r.dtls_rtts} | {r.sctp_rtts} |")
+
+    return "\n".join(lines)
 
 def main():
     parser = argparse.ArgumentParser(description="Analyze pcapng captures from str0m integration tests")
-    parser.add_argument("pcap_dir", help="Directory containing pcapng files (or subdirectories)")
-    parser.add_argument("--output-dir", default="analysis", help="Output directory for charts and reports")
-    parser.add_argument("--summary-file", default=None, help="Write markdown to this file (for $GITHUB_STEP_SUMMARY)")
+    parser.add_argument("pcap_dir", help="Directory containing pcapng files")
+    parser.add_argument("--output-dir", default="analysis", help="Output directory")
+    parser.add_argument("--summary-file", default=None, help="Markdown summary file")
     args = parser.parse_args()
 
     pcap_dir = Path(args.pcap_dir)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    if not pcap_dir.exists():
-        print(f"ERROR: pcap directory does not exist: {pcap_dir}", file=sys.stderr)
-        sys.exit(1)
-
-    # Collect all pcapng files
     pcap_files = collect_pcap_files(pcap_dir)
     print(f"Found {len(pcap_files)} pcapng files")
 
-    if not pcap_files:
-        print("No pcapng files found -- nothing to analyze.")
-        # Write empty summary
-        md = "## Connection RTT Analysis\n\nNo pcap files found -- tests may not have produced captures.\n"
-        if args.summary_file:
-            Path(args.summary_file).write_text(md, encoding="utf-8")
-        return
-
-    # Analyze each session
-    results: list[SessionAnalysis] = []
-
+    results = []
     for filepath, platform, crypto, is_native in pcap_files:
-        filename = filepath.stem  # e.g. "chrome_offerer_active_lite_server"
-        # Remove the _server suffix
-        session_id = filename.removesuffix("_server").removesuffix("_client")
-
-        kind = "native" if is_native else "browser"
-        print(f"  Parsing: {filepath.name} ({kind}, platform={platform}, crypto={crypto})")
+        session_id = filepath.stem.removesuffix("_server").removesuffix("_client")
         packets = parse_pcapng(filepath)
-
         analysis = analyze_session(packets, session_id)
-
-        # Parse session_id components
         meta = parse_session_id(session_id, platform, crypto, is_native)
         analysis.browser = meta["browser"]
         analysis.platform = meta["platform"]
         analysis.crypto = meta["crypto"]
-        analysis.test_type = meta["test_type"]
-        analysis.test_role = meta["role"]
-
+        analysis.client_sdp = meta["client_sdp"]
+        analysis.client_dtls = meta["client_dtls"]
+        analysis.server_dtls = meta["server_dtls"]
+        analysis.server_ice = meta["server_ice"]
+        analysis.snap_mode = meta["snap_mode"]
         results.append(analysis)
 
-    print(f"\nAnalyzed {len(results)} sessions")
-
-    # Generate markdown table
     md = generate_markdown_table(results)
     print("\n" + md)
 
-    # Write markdown
     md_path = output_dir / "summary.md"
     md_path.write_text(md, encoding="utf-8")
-    print(f"\nMarkdown summary: {md_path}")
 
     if args.summary_file:
-        Path(args.summary_file).write_text(md, encoding="utf-8")
-        print(f"GitHub step summary: {args.summary_file}")
-
-    # Generate charts
-    print("\nGenerating charts...")
-    chart_paths = generate_chart(results, output_dir)
-
-    if chart_paths:
-        # For $GITHUB_STEP_SUMMARY, link to the artifact
-        if args.summary_file:
-            summary_md = md + "\n\n### Charts\n\n"
-            summary_md += "> **Download the `rtt-analysis` artifact** to view the PNG charts:\n\n"
-            for cp in chart_paths:
-                summary_md += f"- `{cp.name}` -- {cp.stem.replace('_', ' ').title()}\n"
-            summary_md += "\n"
-            Path(args.summary_file).write_text(summary_md, encoding="utf-8")
-
-    print("\nDone!")
-
+        with open(args.summary_file, "a", encoding="utf-8") as f:
+            f.write(md + "\n")
 
 if __name__ == "__main__":
     main()

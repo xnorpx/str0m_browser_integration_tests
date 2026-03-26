@@ -64,7 +64,7 @@ function findEdgeBinary() {
 /**
  * Karma browser launcher for Edge Headless.
  */
-function EdgeHeadlessBrowser(baseBrowserDecorator, logger) {
+function EdgeHeadlessBrowser(baseBrowserDecorator, logger, args) {
   baseBrowserDecorator(this);
 
   const log = logger.create('launcher:EdgeHeadless');
@@ -115,7 +115,7 @@ function EdgeHeadlessBrowser(baseBrowserDecorator, logger) {
     ];
 
     // Append any custom flags from custom launcher config (e.g. field trials).
-    const extraFlags = this.flags || [];
+    const extraFlags = args.flags || []; console.log('EDGE FLAGS:', extraFlags);
 
     return [...baseFlags, ...extraFlags, url];
   };
@@ -131,7 +131,7 @@ EdgeHeadlessBrowser.prototype = {
   ENV_CMD: 'EDGE_BINARY',
 };
 
-EdgeHeadlessBrowser.$inject = ['baseBrowserDecorator', 'logger'];
+EdgeHeadlessBrowser.$inject = ['baseBrowserDecorator', 'logger', 'args'];
 
 module.exports = {
   'launcher:EdgeHeadless': ['type', EdgeHeadlessBrowser],

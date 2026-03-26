@@ -28,6 +28,7 @@ module.exports = function (config) {
       'karma-webpack',
       'karma-chrome-launcher',
       'karma-firefox-launcher',
+      'karma-local-wd-launcher',
       require('./plugins/karma-str0m-server'),
       require('./plugins/karma-edge-launcher'),
     ],
@@ -73,49 +74,6 @@ module.exports = function (config) {
           'media.autoplay.default': 0,
         },
       },
-
-      ChromeHeadlessSNAP: {
-        base: 'ChromeHeadless',
-        flags: [
-          '--disable-features=WebRtcHideLocalIpsWithMdns',
-          '--disable-background-timer-throttling',
-          '--disable-renderer-backgrounding',
-          '--no-sandbox',
-          '--autoplay-policy=no-user-gesture-required',
-          '--force-fieldtrials=WebRTC-Sctp-Snap/Enabled/',
-        ],
-      },
-
-      ChromeHeadlessSPED: {
-        base: 'ChromeHeadless',
-        flags: [
-          '--disable-features=WebRtcHideLocalIpsWithMdns,WebRtcPqcForDtls',
-          '--disable-background-timer-throttling',
-          '--disable-renderer-backgrounding',
-          '--no-sandbox',
-          '--autoplay-policy=no-user-gesture-required',
-          '--force-fieldtrials=WebRTC-IceHandshakeDtls/Enabled/',
-        ],
-      },
-      EdgeHeadlessSPED: {
-        base: 'EdgeHeadless',
-        flags: [
-          '--disable-features=WebRtcPqcForDtls',
-          '--force-fieldtrials=WebRTC-IceHandshakeDtls/Enabled/',
-        ],
-      },
-
-      ChromeHeadlessWARP: {
-        base: 'ChromeHeadless',
-        flags: [
-          '--disable-features=WebRtcHideLocalIpsWithMdns,WebRtcPqcForDtls',
-          '--disable-background-timer-throttling',
-          '--disable-renderer-backgrounding',
-          '--no-sandbox',
-          '--autoplay-policy=no-user-gesture-required',
-          '--force-fieldtrials=WebRTC-Sctp-Snap/Enabled/WebRTC-IceHandshakeDtls/Enabled/',
-        ],
-      },
     },
 
     reporters: ['progress'],
@@ -125,6 +83,7 @@ module.exports = function (config) {
     captureTimeout: 60000,
 
     port: 9876,
+    hostname: '127.0.0.1',
     colors: true,
     logLevel: config.LOG_INFO,
     autoWatch: false,

@@ -127,10 +127,10 @@ if %HAS_FIREFOX% equ 1 (
     set /a SKIPPED+=1
 )
 
-REM -- Feature tests (SNAP / SPED / WARP) ---------------------------
+REM -- Feature tests (SNAP) ----------------------------------
 echo.
 echo ===============================================
-echo   Feature tests (SNAP / SPED / WARP)
+echo   Feature tests (SNAP)
 echo ===============================================
 
 if %HAS_CHROME% equ 1 (
@@ -145,49 +145,25 @@ if %HAS_CHROME% equ 1 (
         set FAILURES=!FAILURES! "SNAP - Chrome"
         set /a FAIL+=1
     )
-
-    echo.
-    echo ^> SPED - Chrome
-    call npm run test:sped:chrome
-    if !errorlevel! equ 0 (
-        echo   PASSED: SPED - Chrome
-        set /a PASS+=1
-    ) else (
-        echo   FAILED: SPED - Chrome
-        set FAILURES=!FAILURES! "SPED - Chrome"
-        set /a FAIL+=1
-    )
-
-    echo.
-    echo ^> WARP - Chrome
-    call npm run test:warp:chrome
-    if !errorlevel! equ 0 (
-        echo   PASSED: WARP - Chrome
-        set /a PASS+=1
-    ) else (
-        echo   FAILED: WARP - Chrome
-        set FAILURES=!FAILURES! "WARP - Chrome"
-        set /a FAIL+=1
-    )
 ) else (
-    echo   Skipping SNAP/SPED/WARP Chrome (not found^)
-    set /a SKIPPED+=3
+    echo   Skipping SNAP Chrome (not found^)
+    set /a SKIPPED+=1
 )
 
 if %HAS_EDGE% equ 1 (
     echo.
-    echo ^> SPED - Edge
-    call npm run test:sped:edge
+    echo ^> SNAP - Edge
+    call npm run test:snap:edge
     if !errorlevel! equ 0 (
-        echo   PASSED: SPED - Edge
+        echo   PASSED: SNAP - Edge
         set /a PASS+=1
     ) else (
-        echo   FAILED: SPED - Edge
-        set FAILURES=!FAILURES! "SPED - Edge"
+        echo   FAILED: SNAP - Edge
+        set FAILURES=!FAILURES! "SNAP - Edge"
         set /a FAIL+=1
     )
 ) else (
-    echo   Skipping SPED Edge (not found^)
+    echo   Skipping SNAP Edge (not found^)
     set /a SKIPPED+=1
 )
 

@@ -8,11 +8,13 @@
 export type SdpRole = 'offerer' | 'answerer';
 export type IceMode = 'full' | 'lite';
 export type DtlsRole = 'active' | 'passive' | 'auto';
+export type ServerDtlsVersion = 'dtls12' | 'auto' | 'dtls13';
 
 export interface SessionConfig {
   client_sdp_role: SdpRole;
   server_ice_mode: IceMode;
   client_dtls_role: DtlsRole;
+  server_dtls_version?: ServerDtlsVersion;
 }
 
 export interface CreateMessage {

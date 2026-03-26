@@ -7,7 +7,7 @@ use str0m::{
     Candidate, Event, Input, Output, Rtc, RtcConfig,
     change::{SdpAnswer, SdpOffer, SdpPendingOffer},
     channel::ChannelId,
-    config::DtlsCert,
+    config::{DtlsCert, DtlsVersion},
     net::{Protocol, Receive},
 };
 use tokio::{net::UdpSocket, sync::oneshot};
@@ -38,7 +38,7 @@ impl Peer {
         adv_addr: IpAddr,
         udp_port: u16,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        Self::with_cert(ice_lite, adv_addr, udp_port, None)
+        Self::with_cert(ice_lite, adv_addr, udp_port, None, true, None)
     }
 
     pub fn with_cert(
@@ -46,6 +46,8 @@ impl Peer {
         adv_addr: IpAddr,
         udp_port: u16,
         cert: Option<&DtlsCert>,
+        snap_enabled: bool,
+        dtls_version: Option<DtlsVersion>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let udp_socket = std::net::UdpSocket::bind(SocketAddr::new(adv_addr, udp_port))?;
         let std_socket = udp_socket;
@@ -53,7 +55,11 @@ impl Peer {
         let socket = UdpSocket::from_std(std_socket)?;
         let local_addr = socket.local_addr()?;
 
-        let mut config = RtcConfig::new();
+        let mut config = RtcConfig::new().set_snap_enabled(snap_enabled);
+
+        if let Some(v) = dtls_version {
+            config = config.set_dtls_version(v);
+        }
         if ice_lite {
             config = config.set_ice_lite(true);
         }
@@ -379,7 +385,8 @@ fn identify_packet_type(payload: &[u8]) -> &'static str {
         return "empty";
     }
     let first = payload[0];
-    if first == 0x00 || first == 0x01 {
+    // STUN: top two bits are 00 (RFC 5389 Section 6)
+    if first & 0xC0 == 0x00 {
         if payload.len() >= 2 {
             let msg_type = u16::from_be_bytes([payload[0], payload[1]]);
             return match msg_type {
@@ -405,6 +412,6 @@ fn identify_packet_type(payload: &[u8]) -> &'static str {
 fn now_us() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_micros() as u64
 }

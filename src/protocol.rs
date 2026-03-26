@@ -22,11 +22,22 @@ pub enum DtlsRole {
     Auto,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ServerDtlsVersion {
+    Dtls12,
+    #[default]
+    Auto,
+    Dtls13,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionConfig {
     pub client_sdp_role: SdpRole,
     pub server_ice_mode: IceMode,
     pub client_dtls_role: DtlsRole,
+    #[serde(default)]
+    pub server_dtls_version: ServerDtlsVersion,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

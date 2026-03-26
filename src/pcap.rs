@@ -83,11 +83,17 @@ fn build_ipv4_udp_frame(pkt: &CapturedPacket) -> Vec<u8> {
 
     let src_ip = match pkt.src {
         SocketAddr::V4(a) => a.ip().octets(),
-        _ => [0; 4],
+        SocketAddr::V6(_) => {
+            tracing::warn!("IPv6 address in pcap capture, writing zeroed IPv4 header");
+            [0; 4]
+        }
     };
     let dst_ip = match pkt.dst {
         SocketAddr::V4(a) => a.ip().octets(),
-        _ => [0; 4],
+        SocketAddr::V6(_) => {
+            tracing::warn!("IPv6 address in pcap capture, writing zeroed IPv4 header");
+            [0; 4]
+        }
     };
 
     let mut frame = Vec::with_capacity(ip_total_len);

@@ -12,8 +12,10 @@ default = ["aws-lc-rs"]
 aws-lc-rs = ["str0m/aws-lc-rs"]
 rust-crypto = ["str0m/rust-crypto"]
 openssl = ["str0m/openssl"]
+openssl-dimpl = ["str0m/openssl-dimpl"]
 apple-crypto = ["str0m/apple-crypto"]
 wincrypto = ["str0m/wincrypto"]
+wincrypto-dimpl = ["str0m/wincrypto-dimpl"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
