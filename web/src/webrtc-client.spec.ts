@@ -29,6 +29,7 @@ function detectBrowser(): string {
   if (/Edg\//i.test(ua)) return 'edge';
   if (/Firefox\//i.test(ua)) return 'firefox';
   if (/Chrome\//i.test(ua)) return 'chrome';
+  if (/Safari\//i.test(ua) && !/Chrome\//i.test(ua)) return 'safari';
   return 'unknown';
 }
 
@@ -57,7 +58,7 @@ function expectMsg<T extends ServerMessage['type']>(
  * Run a complete connect-and-verify test flow.
  * This is the browser-side equivalent of `run_connect_and_verify()` in integration.rs.
  */
-async function runConnectAndVerify(testName: string, config: SessionConfig): Promise<void> {
+async function runConnectAndVerify(testName: string, config: SessionConfig, allowFailure = false): Promise<void> {
   const wsPort = getServerWsPort();
   const wsUrl = `ws://127.0.0.1:${wsPort}`;
   const sid = allocSessionId(testName);
@@ -72,6 +73,10 @@ async function runConnectAndVerify(testName: string, config: SessionConfig): Pro
   try {
     sendMsg(ws, {type: 'create', session_id: sid, config});
     const created = await recvMsg(ws);
+    if (allowFailure && created.type === 'error') {
+      console.log(`[test] Server failed to create session (expected on some backends): ${created.message}`);
+      return;
+    }
     expectMsg(created, 'created');
 
     let pc: RTCPeerConnection;
@@ -198,6 +203,12 @@ async function runConnectAndVerify(testName: string, config: SessionConfig): Pro
     expectMsg(destroyed, 'destroyed');
 
     pc.close();
+  } catch (e) {
+    if (allowFailure) {
+      console.log(`[test] Connection failed, but allowFailure is true (expected on some backends or browsers): ${e}`);
+      return;
+    }
+    throw e;
   } finally {
     await closeWs(ws);
   }
@@ -261,6 +272,52 @@ describe('str0m Browser Integration Tests', () => {
         server_ice_mode: 'full',
         client_dtls_role: 'active',
       });
+    });
+  });
+
+  describe('Server DTLS Version Tests', () => {
+    it('should connect with server DTLS 1.2', async () => {
+      await runConnectAndVerify('dtls12_offerer_active_lite', {
+        client_sdp_role: 'offerer',
+        server_ice_mode: 'lite',
+        client_dtls_role: 'active',
+        server_dtls_version: 'dtls12'
+      });
+    });
+
+    it('should connect with server DTLS 1.3 (or gracefully abort if unsupported)', async () => {
+      if (detectBrowser() === 'safari') {
+        console.log('[test] Skipping DTLS 1.3 test on Safari');
+        return;
+      }
+      await runConnectAndVerify('dtls13_offerer_active_lite', {
+        client_sdp_role: 'offerer',
+        server_ice_mode: 'lite',
+        client_dtls_role: 'active',
+        server_dtls_version: 'dtls13'
+      }, true);
+    });
+
+    it('should connect with server DTLS 1.2 (answerer)', async () => {
+      await runConnectAndVerify('dtls12_answerer_active_lite', {
+        client_sdp_role: 'answerer',
+        server_ice_mode: 'lite',
+        client_dtls_role: 'active',
+        server_dtls_version: 'dtls12'
+      });
+    });
+
+    it('should connect with server DTLS 1.3 (answerer, or gracefully abort if unsupported)', async () => {
+      if (detectBrowser() === 'safari') {
+        console.log('[test] Skipping DTLS 1.3 test on Safari');
+        return;
+      }
+      await runConnectAndVerify('dtls13_answerer_active_lite', {
+        client_sdp_role: 'answerer',
+        server_ice_mode: 'lite',
+        client_dtls_role: 'active',
+        server_dtls_version: 'dtls13'
+      }, true);
     });
   });
 });

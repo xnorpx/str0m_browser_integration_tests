@@ -8,9 +8,11 @@
     "test:chrome": "npm run test:chrome --prefix web",
     "test:edge": "npm run test:edge --prefix web",
     "test:firefox": "npm run test:firefox --prefix web",
+    "test:safari": "npm run test:safari --prefix web",
     "test:snap:chrome": "npm run test:snap:chrome --prefix web",
-    "test:sped:edge": "npm run test:sped:edge --prefix web",
-    "test:sped:chrome": "npm run test:sped:chrome --prefix web",
-    "test:warp:chrome": "npm run test:warp:chrome --prefix web"
+    "test:snap:edge": "npm run test:snap:edge --prefix web"
+  },
+  "devDependencies": {
+    "karma-webdriver-launcher": "^1.0.8"
   }
 }

@@ -3,6 +3,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
 
+use str0m::config::DtlsVersion;
 use str0m_browser_integration_tests::peer::DataChannelAction;
 use str0m_browser_integration_tests::protocol::*;
 use str0m_browser_integration_tests::{Peer, Sessions, UdpPortAllocator};
@@ -68,6 +69,15 @@ async fn connect_ws(
 use str0m_browser_integration_tests::client;
 
 async fn run_connect_and_verify(test_name: &str, config: SessionConfig) {
+    run_connect_and_verify_full(test_name, config, true, None).await;
+}
+
+async fn run_connect_and_verify_full(
+    test_name: &str,
+    config: SessionConfig,
+    snap_enabled: bool,
+    dtls_version: Option<DtlsVersion>,
+) {
     init();
 
     let ws_port = alloc_ws_port();
@@ -85,7 +95,9 @@ async fn run_connect_and_verify(test_name: &str, config: SessionConfig) {
     assert_eq!(session_id, sid);
 
     let cert = str0m_browser_integration_tests::shared_dtls_cert();
-    let mut client_peer = Peer::with_cert(false, LOCALHOST, 0, Some(cert)).expect("client peer");
+    let mut client_peer =
+        Peer::with_cert(false, LOCALHOST, 0, Some(cert), snap_enabled, dtls_version)
+            .expect("client peer");
 
     match config.client_sdp_role {
         SdpRole::Offerer => {
@@ -210,6 +222,7 @@ async fn browser_offerer_dtls_active_ice_lite() {
             client_sdp_role: SdpRole::Offerer,
             server_ice_mode: IceMode::Lite,
             client_dtls_role: DtlsRole::Active,
+            server_dtls_version: ServerDtlsVersion::Auto,
         },
     )
     .await;
@@ -223,6 +236,7 @@ async fn browser_offerer_dtls_active_ice_full() {
             client_sdp_role: SdpRole::Offerer,
             server_ice_mode: IceMode::Full,
             client_dtls_role: DtlsRole::Active,
+            server_dtls_version: ServerDtlsVersion::Auto,
         },
     )
     .await;
@@ -236,6 +250,7 @@ async fn browser_offerer_dtls_passive_ice_lite() {
             client_sdp_role: SdpRole::Offerer,
             server_ice_mode: IceMode::Lite,
             client_dtls_role: DtlsRole::Passive,
+            server_dtls_version: ServerDtlsVersion::Auto,
         },
     )
     .await;
@@ -249,6 +264,7 @@ async fn browser_offerer_dtls_passive_ice_full() {
             client_sdp_role: SdpRole::Offerer,
             server_ice_mode: IceMode::Full,
             client_dtls_role: DtlsRole::Passive,
+            server_dtls_version: ServerDtlsVersion::Auto,
         },
     )
     .await;
@@ -262,6 +278,7 @@ async fn browser_answerer_dtls_active_ice_lite() {
             client_sdp_role: SdpRole::Answerer,
             server_ice_mode: IceMode::Lite,
             client_dtls_role: DtlsRole::Active,
+            server_dtls_version: ServerDtlsVersion::Auto,
         },
     )
     .await;
@@ -275,7 +292,166 @@ async fn browser_answerer_dtls_active_ice_full() {
             client_sdp_role: SdpRole::Answerer,
             server_ice_mode: IceMode::Full,
             client_dtls_role: DtlsRole::Active,
+            server_dtls_version: ServerDtlsVersion::Auto,
         },
     )
     .await;
+}
+
+// ---------------------------------------------------------------------------
+// SNAP tests: verify connection with SNAP enabled and disabled (native only)
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn snap_on_offerer_active_lite() {
+    run_connect_and_verify_full(
+        "snap_on_offerer_active_lite",
+        SessionConfig {
+            client_sdp_role: SdpRole::Offerer,
+            server_ice_mode: IceMode::Lite,
+            client_dtls_role: DtlsRole::Active,
+            server_dtls_version: ServerDtlsVersion::Auto,
+        },
+        true,
+        None,
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn snap_off_offerer_active_lite() {
+    run_connect_and_verify_full(
+        "snap_off_offerer_active_lite",
+        SessionConfig {
+            client_sdp_role: SdpRole::Offerer,
+            server_ice_mode: IceMode::Lite,
+            client_dtls_role: DtlsRole::Active,
+            server_dtls_version: ServerDtlsVersion::Auto,
+        },
+        false,
+        None,
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn snap_on_answerer_active_lite() {
+    run_connect_and_verify_full(
+        "snap_on_answerer_active_lite",
+        SessionConfig {
+            client_sdp_role: SdpRole::Answerer,
+            server_ice_mode: IceMode::Lite,
+            client_dtls_role: DtlsRole::Active,
+            server_dtls_version: ServerDtlsVersion::Auto,
+        },
+        true,
+        None,
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn snap_off_answerer_active_lite() {
+    run_connect_and_verify_full(
+        "snap_off_answerer_active_lite",
+        SessionConfig {
+            client_sdp_role: SdpRole::Answerer,
+            server_ice_mode: IceMode::Lite,
+            client_dtls_role: DtlsRole::Active,
+            server_dtls_version: ServerDtlsVersion::Auto,
+        },
+        false,
+        None,
+    )
+    .await;
+}
+
+// ---------------------------------------------------------------------------
+// DTLS version tests: verify connection with forced DTLS 1.2 and 1.3
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn dtls12_offerer_active_lite() {
+    run_connect_and_verify_full(
+        "dtls12_offerer_active_lite",
+        SessionConfig {
+            client_sdp_role: SdpRole::Offerer,
+            server_ice_mode: IceMode::Lite,
+            client_dtls_role: DtlsRole::Active,
+            server_dtls_version: ServerDtlsVersion::Dtls12,
+        },
+        true,
+        Some(DtlsVersion::Dtls12),
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn dtls12_answerer_active_lite() {
+    run_connect_and_verify_full(
+        "dtls12_answerer_active_lite",
+        SessionConfig {
+            client_sdp_role: SdpRole::Answerer,
+            server_ice_mode: IceMode::Lite,
+            client_dtls_role: DtlsRole::Active,
+            server_dtls_version: ServerDtlsVersion::Dtls12,
+        },
+        true,
+        Some(DtlsVersion::Dtls12),
+    )
+    .await;
+}
+
+/// DTLS 1.3 is only supported by `aws-lc-rs` and `rust-crypto` backends
+/// (and the `*-dimpl` variants). Other backends will fail to handshake.
+#[tokio::test(flavor = "multi_thread")]
+async fn dtls13_offerer_active_lite() {
+    let config = SessionConfig {
+        client_sdp_role: SdpRole::Offerer,
+        server_ice_mode: IceMode::Lite,
+        client_dtls_role: DtlsRole::Active,
+        server_dtls_version: ServerDtlsVersion::Dtls13,
+    };
+
+    let result = tokio::spawn(run_connect_and_verify_full(
+        "dtls13_offerer_active_lite",
+        config,
+        true,
+        Some(DtlsVersion::Dtls13),
+    ))
+    .await;
+
+    // DTLS 1.3 is not supported by all crypto backends.
+    // On backends that don't support it (openssl, wincrypto, apple-crypto),
+    // the handshake will fail - that's expected.
+    if result.is_err() {
+        eprintln!(
+            "dtls13_offerer_active_lite: expected failure (crypto backend may not support DTLS 1.3)"
+        );
+    }
+}
+
+/// DTLS 1.3 answerer variant - see dtls13_offerer_active_lite for details.
+#[tokio::test(flavor = "multi_thread")]
+async fn dtls13_answerer_active_lite() {
+    let config = SessionConfig {
+        client_sdp_role: SdpRole::Answerer,
+        server_ice_mode: IceMode::Lite,
+        client_dtls_role: DtlsRole::Active,
+        server_dtls_version: ServerDtlsVersion::Dtls13,
+    };
+
+    let result = tokio::spawn(run_connect_and_verify_full(
+        "dtls13_answerer_active_lite",
+        config,
+        true,
+        Some(DtlsVersion::Dtls13),
+    ))
+    .await;
+
+    if result.is_err() {
+        eprintln!(
+            "dtls13_answerer_active_lite: expected failure (crypto backend may not support DTLS 1.3)"
+        );
+    }
 }

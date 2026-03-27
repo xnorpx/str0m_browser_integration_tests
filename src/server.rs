@@ -73,7 +73,7 @@ pub async fn run_server(
                                 let (shutdown_tx, shutdown_rx) = oneshot::channel();
                                 running
                                     .lock()
-                                    .unwrap()
+                                    .expect("running sessions lock poisoned")
                                     .insert(session_id.clone(), shutdown_tx);
                                 let sid = session_id;
                                 tokio::spawn(async move {
@@ -98,7 +98,10 @@ pub async fn run_server(
                                 });
                             }
                             ServerAction::StopPeer { session_id } => {
-                                let value = running.lock().unwrap().remove(&session_id);
+                                let value = running
+                                    .lock()
+                                    .expect("running sessions lock poisoned")
+                                    .remove(&session_id);
                                 if let Some(tx) = value {
                                     let _ = tx.send(());
                                 }
@@ -157,18 +160,45 @@ fn handle_client_message(
             let ice_lite = config.server_ice_mode == IceMode::Lite;
             let udp_port = udp_ports.next_port();
             let cert = crate::shared_dtls_cert();
-            let mut peer = match Peer::with_cert(ice_lite, adv_addr, udp_port, Some(cert)) {
-                Ok(p) => p,
-                Err(e) => {
+            if config.server_dtls_version == ServerDtlsVersion::Dtls13 {
+                let supports_dtls13 = cfg!(any(
+                    feature = "aws-lc-rs",
+                    feature = "rust-crypto",
+                    feature = "openssl-dimpl",
+                    feature = "wincrypto-dimpl"
+                ));
+                if !supports_dtls13 {
                     return (
                         vec![ServerMessage::Error {
                             session_id: Some(session_id),
-                            message: format!("Failed to create peer: {e}"),
+                            message: "Backend does not support DTLS 1.3. Skipping test."
+                                .to_string(),
                         }],
                         ServerAction::None,
                     );
                 }
+            }
+
+            let dtls_version = match config.server_dtls_version {
+                ServerDtlsVersion::Dtls12 => Some(str0m::config::DtlsVersion::Dtls12),
+                ServerDtlsVersion::Auto => None,
+                ServerDtlsVersion::Dtls13 => Some(str0m::config::DtlsVersion::Dtls13),
             };
+
+            let mut peer =
+                match Peer::with_cert(ice_lite, adv_addr, udp_port, Some(cert), true, dtls_version)
+                {
+                    Ok(p) => p,
+                    Err(e) => {
+                        return (
+                            vec![ServerMessage::Error {
+                                session_id: Some(session_id),
+                                message: format!("Failed to create peer: {e}"),
+                            }],
+                            ServerAction::None,
+                        );
+                    }
+                };
 
             let mut responses = vec![ServerMessage::Created {
                 session_id: session_id.clone(),
@@ -196,7 +226,7 @@ fn handle_client_message(
 
             sessions
                 .lock()
-                .unwrap()
+                .expect("sessions lock poisoned")
                 .insert(session_id, Session { config, peer });
 
             (responses, ServerAction::None)
@@ -204,7 +234,10 @@ fn handle_client_message(
 
         ClientMessage::Destroy { session_id } => {
             info!(%session_id, "Destroying session");
-            sessions.lock().unwrap().remove(&session_id);
+            sessions
+                .lock()
+                .expect("sessions lock poisoned")
+                .remove(&session_id);
             (
                 vec![ServerMessage::Destroyed {
                     session_id: session_id.clone(),
@@ -215,7 +248,7 @@ fn handle_client_message(
 
         ClientMessage::Sdp { session_id, sdp } => {
             info!(%session_id, "Received SDP from client ({} bytes)", sdp.len());
-            let mut sessions = sessions.lock().unwrap();
+            let mut sessions = sessions.lock().expect("sessions lock poisoned");
             let Some(session) = sessions.get_mut(&session_id) else {
                 return (
                     vec![ServerMessage::Error {
@@ -271,7 +304,10 @@ fn handle_client_message(
 
         ClientMessage::Ready { session_id } => {
             info!(%session_id, "Client signaling complete, spawning peer event loop");
-            let session = sessions.lock().unwrap().remove(&session_id);
+            let session = sessions
+                .lock()
+                .expect("sessions lock poisoned")
+                .remove(&session_id);
             match session {
                 Some(s) => (
                     vec![ServerMessage::Ready {

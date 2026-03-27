@@ -21,7 +21,7 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -46,19 +46,21 @@ jobs:
       matrix:
         include:
           # Linux
-          - { os: ubuntu-latest,  os-label: Linux,   os-slug: linux,   crypto: aws-lc-rs,    artifact: server-linux-aws-lc-rs,    binary: target/release/server }
-          - { os: ubuntu-latest,  os-label: Linux,   os-slug: linux,   crypto: rust-crypto,  artifact: server-linux-rust-crypto,  binary: target/release/server }
-          - { os: ubuntu-latest,  os-label: Linux,   os-slug: linux,   crypto: openssl,      artifact: server-linux-openssl,      binary: target/release/server }
+          - { os: ubuntu-latest,  os-label: Linux,   os-slug: linux,   crypto: aws-lc-rs,     artifact: server-linux-aws-lc-rs,     binary: target/release/server }
+          - { os: ubuntu-latest,  os-label: Linux,   os-slug: linux,   crypto: rust-crypto,   artifact: server-linux-rust-crypto,   binary: target/release/server }
+          - { os: ubuntu-latest,  os-label: Linux,   os-slug: linux,   crypto: openssl,       artifact: server-linux-openssl,       binary: target/release/server }
+          - { os: ubuntu-latest,  os-label: Linux,   os-slug: linux,   crypto: openssl-dimpl, artifact: server-linux-openssl-dimpl, binary: target/release/server }
           # macOS
-          - { os: macos-latest,   os-label: macOS,   os-slug: macos,   crypto: aws-lc-rs,    artifact: server-macos-aws-lc-rs,    binary: target/release/server }
-          - { os: macos-latest,   os-label: macOS,   os-slug: macos,   crypto: rust-crypto,  artifact: server-macos-rust-crypto,  binary: target/release/server }
-          - { os: macos-latest,   os-label: macOS,   os-slug: macos,   crypto: apple-crypto, artifact: server-macos-apple-crypto, binary: target/release/server }
+          - { os: macos-latest,   os-label: macOS,   os-slug: macos,   crypto: aws-lc-rs,     artifact: server-macos-aws-lc-rs,     binary: target/release/server }
+          - { os: macos-latest,   os-label: macOS,   os-slug: macos,   crypto: rust-crypto,   artifact: server-macos-rust-crypto,   binary: target/release/server }
+          - { os: macos-latest,   os-label: macOS,   os-slug: macos,   crypto: apple-crypto,  artifact: server-macos-apple-crypto,  binary: target/release/server }
           # Windows
-          - { os: windows-latest, os-label: Windows, os-slug: windows, crypto: aws-lc-rs,    artifact: server-windows-aws-lc-rs,    binary: target/release/server.exe }
-          - { os: windows-latest, os-label: Windows, os-slug: windows, crypto: rust-crypto,  artifact: server-windows-rust-crypto,  binary: target/release/server.exe }
-          - { os: windows-latest, os-label: Windows, os-slug: windows, crypto: wincrypto,    artifact: server-windows-wincrypto,    binary: target/release/server.exe }
+          - { os: windows-latest, os-label: Windows, os-slug: windows, crypto: aws-lc-rs,      artifact: server-windows-aws-lc-rs,      binary: target/release/server.exe }
+          - { os: windows-latest, os-label: Windows, os-slug: windows, crypto: rust-crypto,    artifact: server-windows-rust-crypto,    binary: target/release/server.exe }
+          - { os: windows-latest, os-label: Windows, os-slug: windows, crypto: wincrypto,      artifact: server-windows-wincrypto,      binary: target/release/server.exe }
+          - { os: windows-latest, os-label: Windows, os-slug: windows, crypto: wincrypto-dimpl, artifact: server-windows-wincrypto-dimpl, binary: target/release/server.exe }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -74,21 +76,63 @@ jobs:
       - name: Run Rust tests
         run: cargo test --release --no-default-features --features ${{ matrix.crypto }}
 
-      - name: Upload server binary
-        uses: actions/upload-artifact@v4
+      # --- Upload server binary ---
+      - name: Upload server binary (Try 1)
+        id: u1
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.binary }}
           retention-days: 1
+      - name: Upload server binary (Try 2)
+        id: u2
+        if: steps.u1.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.binary }}
+          retention-days: 1
+      - name: Upload server binary (Try 3)
+        if: steps.u2.outcome == 'failure'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.binary }}
+          retention-days: 1
+      # ---------------------------
 
-      - name: Upload native test pcaps
+      # --- Upload native test pcaps ---
+      - name: Upload native test pcaps (Try 1)
+        id: up1
         if: always()
-        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
         with:
           name: pcaps-${{ matrix.os-slug }}-${{ matrix.crypto }}-native
           path: target/pcap/
           retention-days: 5
           if-no-files-found: ignore
+      - name: Upload native test pcaps (Try 2)
+        id: up2
+        if: always() && steps.up1.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: pcaps-${{ matrix.os-slug }}-${{ matrix.crypto }}-native
+          path: target/pcap/
+          retention-days: 5
+          if-no-files-found: ignore
+      - name: Upload native test pcaps (Try 3)
+        if: always() && steps.up2.outcome == 'failure'
+        uses: actions/upload-artifact@v7
+        with:
+          name: pcaps-${{ matrix.os-slug }}-${{ matrix.crypto }}-native
+          path: target/pcap/
+          retention-days: 5
+          if-no-files-found: ignore
+      # --------------------------------
 
   # Browser test matrix (OS x crypto x browser)
   test:
@@ -99,31 +143,32 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        crypto: [aws-lc-rs, rust-crypto, openssl, apple-crypto, wincrypto]
+        crypto: [aws-lc-rs, rust-crypto, openssl, openssl-dimpl, apple-crypto, wincrypto, wincrypto-dimpl]
         test:
           - { name: "Base · Chrome",  script: "test:chrome" }
           - { name: "Base · Edge",    script: "test:edge" }
           - { name: "Base · Firefox", script: "test:firefox" }
-          - { name: "SPED · Chrome",  script: "test:sped:chrome" }
-          - { name: "SPED · Edge",    script: "test:sped:edge" }
+          - { name: "Base · Safari",  script: "test:safari" }
           - { name: "SNAP · Chrome",  script: "test:snap:chrome" }
-          - { name: "WARP · Chrome",  script: "test:warp:chrome" }
         exclude:
-          # OpenSSL skipped on macOS and Windows
+          # OpenSSL only on Linux
           - { os: macos-latest,   crypto: openssl }
           - { os: windows-latest, crypto: openssl }
+          - { os: macos-latest,   crypto: openssl-dimpl }
+          - { os: windows-latest, crypto: openssl-dimpl }
           # apple-crypto only on macOS
           - { os: ubuntu-latest,  crypto: apple-crypto }
           - { os: windows-latest, crypto: apple-crypto }
           # wincrypto only on Windows
           - { os: ubuntu-latest,  crypto: wincrypto }
           - { os: macos-latest,   crypto: wincrypto }
+          - { os: ubuntu-latest,  crypto: wincrypto-dimpl }
+          - { os: macos-latest,   crypto: wincrypto-dimpl }
           # wincrypto + Firefox: SChannel DTLS cipher mismatch
-          - { crypto: wincrypto, test: { name: "Base \xb7 Firefox", script: "test:firefox" } }
-          # wincrypto + SPED/WARP: SChannel can't handle SPED-embedded DTLS ClientHello
-          - { crypto: wincrypto, test: { name: "SPED · Chrome",  script: "test:sped:chrome" } }
-          - { crypto: wincrypto, test: { name: "SPED · Edge",    script: "test:sped:edge" } }
-          - { crypto: wincrypto, test: { name: "WARP · Chrome",  script: "test:warp:chrome" } }
+          - { crypto: wincrypto, test: { name: "Base · Firefox", script: "test:firefox" } }
+          # Safari only runs on macOS
+          - { os: ubuntu-latest, test: { name: "Base · Safari", script: "test:safari" } }
+          - { os: windows-latest, test: { name: "Base · Safari", script: "test:safari" } }
         # Map OS to labels, slugs, and binary names
         include:
           - os: ubuntu-latest
@@ -139,18 +184,36 @@ jobs:
             os-slug: windows
             bin: server.exe
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 22
 
-      - name: Download server binary
-        uses: actions/download-artifact@v4
+      # --- Download server binary ---
+      - name: Download server binary (Try 1)
+        id: dl1
+        continue-on-error: true
+        uses: actions/download-artifact@v8
         with:
           name: server-${{ matrix.os-slug }}-${{ matrix.crypto }}
           path: target/release
+      - name: Download server binary (Try 2)
+        id: dl2
+        if: steps.dl1.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: server-${{ matrix.os-slug }}-${{ matrix.crypto }}
+          path: target/release
+      - name: Download server binary (Try 3)
+        if: steps.dl2.outcome == 'failure'
+        uses: actions/download-artifact@v8
+        with:
+          name: server-${{ matrix.os-slug }}-${{ matrix.crypto }}
+          path: target/release
+      # ------------------------------
 
       - name: Make server executable
         if: runner.os != 'Windows'
@@ -160,9 +223,15 @@ jobs:
         working-directory: web
         run: npm ci
 
+      - name: Start Safari WebDriver
+        if: matrix.test.script == 'test:safari'
+        run: |
+          sudo safaridriver --enable
+
       - name: Run ${{ matrix.test.name }}
         env:
           PREBUILT_SERVER_BINARY: ${{ github.workspace }}/target/release/${{ matrix.bin }}
+          DEBUG: pw:browser,pw:api
         run: npm run ${{ matrix.test.script }}
       - name: Sanitize artifact name
         if: always()
@@ -172,14 +241,36 @@ jobs:
           name="pcaps-${{ matrix.os-slug }}-${{ matrix.crypto }}-${{ matrix.test.script }}"
           echo "name=${name//:/-}" >> "$GITHUB_OUTPUT"
 
-      - name: Upload pcap captures
+      # --- Upload pcap captures ---
+      - name: Upload pcap captures (Try 1)
+        id: upcap1
         if: always()
-        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.artifact.outputs.name }}
           path: target/pcap/
           retention-days: 5
           if-no-files-found: ignore
+      - name: Upload pcap captures (Try 2)
+        id: upcap2
+        if: always() && steps.upcap1.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: target/pcap/
+          retention-days: 5
+          if-no-files-found: ignore
+      - name: Upload pcap captures (Try 3)
+        if: always() && steps.upcap2.outcome == 'failure'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: target/pcap/
+          retention-days: 5
+          if-no-files-found: ignore
+      # ----------------------------
 
   # Analyze pcap captures and generate RTT report
   analyze:
@@ -188,7 +279,7 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -198,12 +289,32 @@ jobs:
       - name: Install dependencies
         run: pip install matplotlib numpy
 
-      - name: Download all pcap artifacts
-        uses: actions/download-artifact@v4
+      # --- Download all pcap artifacts ---
+      - name: Download all pcap artifacts (Try 1)
+        id: dl_pcaps1
+        continue-on-error: true
+        uses: actions/download-artifact@v8
         with:
           path: all-pcaps
           pattern: pcaps-*
           merge-multiple: false
+      - name: Download all pcap artifacts (Try 2)
+        id: dl_pcaps2
+        if: steps.dl_pcaps1.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          path: all-pcaps
+          pattern: pcaps-*
+          merge-multiple: false
+      - name: Download all pcap artifacts (Try 3)
+        if: steps.dl_pcaps2.outcome == 'failure'
+        uses: actions/download-artifact@v8
+        with:
+          path: all-pcaps
+          pattern: pcaps-*
+          merge-multiple: false
+      # -----------------------------------
 
       - name: List downloaded pcaps
         run: find all-pcaps -name '*.pcapng' | head -100 || echo "No pcapng files found"
@@ -214,10 +325,30 @@ jobs:
             --output-dir analysis \
             --summary-file "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload analysis report & charts
+      # --- Upload analysis report & charts ---
+      - name: Upload analysis report & charts (Try 1)
+        id: up_rep1
         if: always()
-        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
         with:
           name: rtt-analysis
           path: analysis/
           retention-days: 30
+      - name: Upload analysis report & charts (Try 2)
+        id: up_rep2
+        if: always() && steps.up_rep1.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: rtt-analysis
+          path: analysis/
+          retention-days: 30
+      - name: Upload analysis report & charts (Try 3)
+        if: always() && steps.up_rep2.outcome == 'failure'
+        uses: actions/upload-artifact@v7
+        with:
+          name: rtt-analysis
+          path: analysis/
+          retention-days: 30
+      # ---------------------------------------

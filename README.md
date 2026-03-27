@@ -24,13 +24,12 @@ In 2011, this wasn't much worse than the 4 RTTs needed for a WebSocket over TCP/
 | Optimization | What it Does | RTT Savings |
 |---|---|:---:|
 | **SNAP** | SCTP was designed as L4 with anti-hijack/DDoS mechanisms (cookie exchange). Under DTLS these are redundant. SNAP removes the SCTP 4-way handshake entirely, exchanging init params declaratively via SDP. | **−2 RTT** |
-| **SPED** | Extends STUN messages with a DATA attribute to piggyback DTLS records on ICE connectivity checks, allowing the first DTLS flight to occur *concurrently* with STUN. | **−1 RTT** |
-| **DTLS 1.3** ([RFC 9147](https://datatracker.ietf.org/doc/rfc9147/)) | Reduces the DTLS handshake from 2 RTTs to 1 RTT. Combined with SPED, this single RTT is absorbed into the ICE exchange. | **−1 RTT** |
-| **WARP** (all three) | SNAP + SPED + DTLS 1.3 combined | **−4 RTT** |
+| **DTLS 1.3** ([RFC 9147](https://datatracker.ietf.org/doc/rfc9147/)) | Reduces the DTLS handshake from 2 RTTs to 1 RTT. | **−1 RTT** |
+| **WARP** (combined) | SNAP + DTLS 1.3 | **−3 RTT** |
 
 This repo captures pcaps from every test permutation so we can **observe and quantify** these improvements as str0m and browsers add support.
 
-> **Note:** DTLS 1.3 is enabled by default in Chrome/Edge since Oct 2025 — the base tests already exercise it. str0m does **not** yet implement SNAP or SPED, but browsers fall back gracefully when the server doesn't support them.
+> **Note:** DTLS 1.3 is enabled by default in Chrome/Edge since Oct 2025. str0m supports DTLS 1.3 via the `aws-lc-rs` and `rust-crypto` backends (using `DtlsVersion::Auto`). SNAP is verified both in browser tests and native Rust-to-Rust tests.
 
 ## Architecture Overview
 
@@ -80,7 +79,7 @@ graph LR
 
     subgraph "TypeScript (web/src)"
         spec_base["webrtc-client.spec.ts<br/>Base browser tests"]
-        spec_warp["webrtc-warp.spec.ts<br/>SNAP/SPED/WARP tests"]
+        spec_warp["webrtc-warp.spec.ts<br/>SNAP/WARP tests"]
         ts_proto["protocol.ts<br/>Message types"]
         ts_signal["signaling.ts<br/>WS client"]
     end
@@ -205,70 +204,49 @@ sequenceDiagram
 
 ### WARP Setup (2 RTTs to Data Channel)
 
-With **SNAP** (SCTP params in SDP), **SPED** (DTLS piggybacked on STUN), and **DTLS 1.3** (1-RTT handshake):
+With **SNAP** (SCTP params in SDP) and **DTLS 1.3** (1-RTT handshake):
 
 ```mermaid
 sequenceDiagram
     participant O as Offerer (Browser)
     participant A as Answerer (Server)
 
-    O->>A: SDP Offer (actpass, sped, snap)
-    A-->>O: SDP Answer (passive, sped, snap, lite)
+    O->>A: SDP Offer (actpass, snap)
+    A-->>O: SDP Answer (passive, snap, lite)
     Note right of A: RTT 1 — Signaling
 
-    O->>A: ICE Check + DTLS ClientHello (via SPED)
-    A-->>O: ICE Response + DTLS ServerHello/Fin
-    A->>O: ICE Triggered Check
-    Note right of A: RTT 2 — Offerer media/data ready
+    O->>A: ICE Check
+    A-->>O: ICE Response
+    Note right of A: RTT 2 — ICE connected
+
+    O->>A: DTLS ClientHello
+    A-->>O: DTLS ServerHello/Fin
+    Note right of A: RTT 3 — DTLS done, data ready
 
     O->>A: DTLS Finished + DCEP Open + "hello"
-    O-->>A: ICE Response
-    Note left of O: Answerer media/data ready (2.5 RTT)
-
     A-->>O: DCEP ACK + "world"
 ```
 
-### WARP with ICE Lite Server (1.5 RTT server-ready)
+### WARP with DTLS 1.3 + SNAP (Minimal RTTs)
 
-When the server uses `a=setup:passive` + ICE Lite, it can send data as soon as the DTLS ClientHello arrives — no triggered check needed:
+With DTLS 1.3 reducing the handshake to 1 RTT and SNAP eliminating the SCTP 4-way:
 
 ```mermaid
 sequenceDiagram
     participant C as Client (Browser)
     participant S as Server (ICE Lite)
 
-    C->>S: SDP Offer (actpass, sped, snap)
-    S-->>C: SDP Answer (passive, sped, snap, lite)
+    C->>S: SDP Offer (actpass, snap)
+    S-->>C: SDP Answer (passive, snap, lite)
     Note right of S: RTT 1 — Signaling
 
-    C->>S: ICE Check + DTLS ClientHello (via SPED)
-    Note right of S: Server media/data ready (1.5 RTT)
+    C->>S: ICE Check + DTLS ClientHello
+    S-->>C: ICE Response + DTLS ServerHello/Fin
+    Note right of S: RTT 2 — ICE + DTLS done
 
-    S-->>C: ICE Response + DTLS ServerHello/Fin + DCEP Open
-    Note left of C: RTT 2 — Client media/data ready
-
-    C->>S: DTLS Finished + DCEP ACK + "hello"
-    S-->>C: "world"
-```
-
-### Future: 0-RTT Resumption (1 RTT total)
-
-DTLS 1.3 supports 0-RTT session resumption. Combined with SPED, application data can be sent concurrently with the DTLS ClientHello:
-
-```mermaid
-sequenceDiagram
-    participant C as Client (Browser)
-    participant S as Server (ICE Lite)
-
-    C->>S: SDP Offer (actpass, sped, snap)
-    S-->>C: SDP Answer (passive, sped, snap, lite)
-    Note left of C: Client media/data ready (1 RTT)
-
-    C->>S: ICE Check + DTLS CHello + DCEP Open + "hi"
-    Note right of S: Server media/data ready (1.5 RTT)
-
-    S-->>C: ICE Response + DTLS ServerHello/Fin + DCEP ACK
-    C->>S: EndOfEarlyData + DTLS Finished
+    C->>S: DTLS Finished + DCEP Open + "hello"
+    S-->>C: DCEP ACK + "world"
+    Note left of C: Data ready (2.5 RTT)
 ```
 
 ### RTT Summary
@@ -293,15 +271,14 @@ gantt
     SCTP 4-way      :b3, after b2, 2
     Data Ready      :milestone, after b3, 0
 
-    section SPED + DTLS 1.3
+    section SNAP + DTLS 1.3
     Signaling       :c0, 0, 1
-    ICE + DTLS (SPED) :c1, after c0, 1
-    SCTP 4-way      :c2, after c1, 2
-    Data Ready      :milestone, after c2, 0
+    ICE + DTLS 1.3  :c1, after c0, 1
+    Data Ready      :milestone, after c1, 0
 
-    section WARP (SPED+SNAP+DTLS1.3)
+    section WARP (SNAP+DTLS1.3)
     Signaling       :d0, 0, 1
-    ICE+DTLS (SPED) :d1, after d0, 1
+    ICE+DTLS 1.3    :d1, after d0, 1
     Data Ready      :milestone, after d1, 0
 
     section Future 0-RTT
@@ -324,19 +301,18 @@ Every base test verifies a full WebRTC connection by sending `"hello from browse
 | `answerer_active_lite` | Server offers | Browser = DTLS client | Server ICE-Lite |
 | `answerer_active_full` | Server offers | Browser = DTLS client | Server ICE-Full |
 
-### Feature Tests (SNAP / SPED / WARP)
+### Feature Tests (SNAP / WARP)
 
 Experimental Chromium field trials are enabled via browser flags:
 
 | Feature | Chromium Flag | What it Does | Spec |
 |---------|---------------|--------------|------|
 | **SNAP** | `WebRTC-Sctp-Snap/Enabled/` | Removes SCTP 4-way handshake; init params exchanged in SDP | [draft-hancke-tsvwg-snap](https://datatracker.ietf.org/doc/draft-hancke-tsvwg-snap/) |
-| **SPED** | `WebRTC-IceHandshakeDtls/Enabled/` | Piggybacks DTLS ClientHello inside STUN Binding Request | [draft-okonkwo-ice-dtlsice](https://datatracker.ietf.org/doc/draft-okonkwo-ice-dtlsice/) |
-| **WARP** | Both flags combined | SNAP + SPED + DTLS 1.3 = 2 RTT setup | [WARP spec](https://docs.google.com/document/d/1vppO3GzhQ1dkKzBN_olr4O9VML58eX2P70Hb_8hLc5w) |
+| **WARP** | SNAP + DTLS 1.3 | SNAP + DTLS 1.3 = minimal RTT setup | [WARP spec](https://docs.google.com/document/d/1vppO3GzhQ1dkKzBN_olr4O9VML58eX2P70Hb_8hLc5w) |
 
 Each feature test runs `offerer` and `answerer` variants against ICE-Lite.
 
-> **ICE Lite is RECOMMENDED for WARP servers** (per the WARP spec): a Lite server can respond immediately to a SPED-tunneled DTLS ClientHello without waiting for its own connectivity check, enabling the 1.5-RTT server-ready path.
+> **ICE Lite is RECOMMENDED for WARP servers** (per the WARP spec): a Lite server can respond immediately without waiting for its own connectivity check, enabling minimal RTTs.
 
 ### CI Matrix
 
@@ -364,8 +340,6 @@ graph LR
 
     subgraph Features["Feature Tests"]
         SNAP["SNAP (Chrome)"]
-        SPED_C["SPED (Chrome)"]
-        SPED_E["SPED (Edge)"]
         WARP["WARP (Chrome)"]
     end
 
@@ -396,7 +370,7 @@ The full CI runs **~63 test jobs** (after exclusions for platform-specific crypt
 │   └── integration.rs             # Native Rust-to-Rust integration tests
 ├── web/
 │   ├── karma.conf.js              # Karma config (base browser tests)
-│   ├── karma.warp.conf.js         # Karma config (SNAP/SPED/WARP tests)
+    └── karma.warp.conf.js         # Karma config (SNAP/WARP tests)
 │   ├── plugins/                   # karma-str0m-server, karma-edge-launcher
 │   └── src/
 │       ├── protocol.ts            # TS mirror of protocol.rs
@@ -500,17 +474,15 @@ Expected progression as str0m adds support:
 |-----------|:----------:|-----------|-------|
 | Baseline (DTLS 1.2) | **6** | 1 sig + 1–1.5 ICE + 2 DTLS + 2 SCTP | Full ICE with non-aggressive nomination |
 | DTLS 1.3 | **5** | 1 sig + 1–1.5 ICE + 1 DTLS + 2 SCTP | Chrome/Edge default since Oct 2025 |
-| + SPED | **4** | 1 sig + 1 ICE/DTLS + 2 SCTP | DTLS piggybacked on STUN via SPED |
-| **Full WARP** | **2** | 1 sig + 1 ICE/DTLS | + SNAP removes SCTP handshake entirely |
-| Future 0-RTT | **1** | 1 sig (data in first flight) | DTLS 1.3 session resumption |
+| + SNAP | **3** | 1 sig + 1 ICE + 1 DTLS | SNAP removes SCTP handshake entirely |
+| **Full WARP** | **2** | 1 sig + 1 ICE/DTLS | SNAP + DTLS 1.3 |
 
-> With **ICE Lite** (recommended for WARP servers), the server is ready to send at **1.5 RTT** — it doesn't need to wait for its own triggered check. Full ICE adds ~0.5 RTT to the ICE step for non-aggressive nomination.
+> With **ICE Lite** (recommended for WARP servers), the server is ready to send at **1.5 RTT** — it doesn't need to wait for its own triggered check.
 
 ## References
 
 - **WARP spec** — [WebRTC Abridged Roundtrip Protocol](https://docs.google.com/document/d/1vppO3GzhQ1dkKzBN_olr4O9VML58eX2P70Hb_8hLc5w) (Uberti & Hancke, 2025)
 - **SNAP** — [draft-hancke-tsvwg-snap](https://datatracker.ietf.org/doc/draft-hancke-tsvwg-snap/) — SCTP Negotiation Acceleration Protocol
-- **SPED** — [draft-okonkwo-ice-dtlsice](https://datatracker.ietf.org/doc/draft-okonkwo-ice-dtlsice/) — STUN Protocol for Embedding DTLS
 - **DTLS 1.3** — [RFC 9147](https://datatracker.ietf.org/doc/rfc9147/)
 - **str0m** — [github.com/algesten/str0m](https://github.com/algesten/str0m)
 - **WebRTC Data Channels** — [RFC 8831](https://datatracker.ietf.org/doc/rfc8831/) (the protocol sandwich, Section 5)

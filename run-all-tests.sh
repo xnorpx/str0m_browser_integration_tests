@@ -94,23 +94,21 @@ else
   echo -e "${CYAN}[SKIP] Skipping Firefox (not found)${NC}"; ((SKIPPED++))
 fi
 
-# -- Feature tests (SNAP / SPED / WARP) ------------------------------
+# -- Feature tests (SNAP) --------------------------------------
 echo -e "\n${BOLD}===============================================${NC}"
-echo -e "${BOLD}  Feature tests (SNAP / SPED / WARP)${NC}"
+echo -e "${BOLD}  Feature tests (SNAP)${NC}"
 echo -e "${BOLD}===============================================${NC}"
 
 if $has_chrome; then
   run "SNAP · Chrome"  npm run test:snap:chrome
-  run "SPED · Chrome"  npm run test:sped:chrome
-  run "WARP · Chrome"  npm run test:warp:chrome
 else
-  echo -e "${CYAN}[SKIP] Skipping SNAP/SPED/WARP Chrome (not found)${NC}"; ((SKIPPED+=3))
+  echo -e "${CYAN}[SKIP] Skipping SNAP Chrome (not found)${NC}"; ((SKIPPED+=1))
 fi
 
 if $has_edge; then
-  run "SPED · Edge"    npm run test:sped:edge
+  run "SNAP · Edge"  npm run test:snap:edge
 else
-  echo -e "${CYAN}[SKIP] Skipping SPED Edge (not found)${NC}"; ((SKIPPED++))
+  echo -e "${CYAN}[SKIP] Skipping SNAP Edge (not found)${NC}"; ((SKIPPED+=1))
 fi
 
 # -- Summary ----------------------------------------------------------

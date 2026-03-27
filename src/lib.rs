@@ -47,7 +47,11 @@ impl UdpPortAllocator {
         if self.start == 0 {
             return 0;
         }
-        self.next.fetch_add(1, Ordering::Relaxed)
+        let port = self.next.fetch_add(1, Ordering::Relaxed);
+        if port == u16::MAX {
+            panic!("UDP port allocator exhausted");
+        }
+        port
     }
 }
 
