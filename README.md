@@ -1,6 +1,6 @@
 # str0m Browser Integration Tests
 
-End-to-end WebRTC integration tests for [str0m](https://github.com/algesten/str0m), exercising **ICE**, **DTLS**, **SCTP**, and **DataChannel** negotiation between a Rust server and real browsers (Chrome, Edge, Firefox). All sessions are packet-captured and analyzed to count **round-trip times (RTTs)** — making this the primary observatory for measuring the connection-setup improvements delivered by **[WARP](https://docs.google.com/document/d/1vppO3GzhQ1dkKzBN_olr4O9VML58eX2P70Hb_8hLc5w)** (WebRTC Abridged Roundtrip Protocol).
+End-to-end WebRTC integration tests for [str0m](https://github.com/algesten/str0m), exercising **ICE**, **DTLS**, **SCTP**, and **DataChannel** negotiation between a Rust server and real browsers (Chrome, Edge, Firefox, Safari). All sessions are packet-captured and analyzed to count **round-trip times (RTTs)** — making this the primary observatory for measuring the connection-setup improvements delivered by **[WARP](https://docs.google.com/document/d/1vppO3GzhQ1dkKzBN_olr4O9VML58eX2P70Hb_8hLc5w)** (WebRTC Abridged Roundtrip Protocol).
 
 ## The Problem: 6 RTTs to Open a Data Channel
 
@@ -29,7 +29,7 @@ In 2011, this wasn't much worse than the 4 RTTs needed for a WebSocket over TCP/
 
 This repo captures pcaps from every test permutation so we can **observe and quantify** these improvements as str0m and browsers add support.
 
-> **Note:** DTLS 1.3 is enabled by default in Chrome/Edge since Oct 2025. str0m supports DTLS 1.3 via the `aws-lc-rs` and `rust-crypto` backends (using `DtlsVersion::Auto`). SNAP is verified both in browser tests and native Rust-to-Rust tests.
+> **Note:** DTLS 1.3 is enabled by default in Chrome/Edge since Oct 2025. str0m supports DTLS 1.3 via the `aws-lc-rs` and `rust-crypto` backends (using `DtlsVersion::Auto`). SNAP is verified both in browser tests and native Rust-to-Rust tests. Safari is tested natively on macOS via `safaridriver`, though explicit DTLS 1.3 and SNAP tests are currently skipped as Safari does not yet fully support these natively.
 
 ## Architecture Overview
 
@@ -336,6 +336,7 @@ graph LR
         Chrome
         Edge
         Firefox
+        Safari["Safari (macOS only)"]
     end
 
     subgraph Features["Feature Tests"]
