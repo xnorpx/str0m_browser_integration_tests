@@ -90,11 +90,16 @@ function getLanIp() {
  * Spawn the server and wait for the ready indicator on stdout.
  * Returns { proc, ip, port } parsed from: SERVER READY ws://<ip>:<port>
  */
-function startServer(binary, wsPort, projectRoot) {
+function startServer(binary, wsPort, projectRoot, config = {}) {
   return new Promise((resolve, reject) => {
-    // Use LAN IP so Firefox (which ignores loopback prefs) can reach the server.
-    // Chrome/Edge also work fine with the LAN IP.
-    const advAddr = getLanIp();
+    const browsers = Array.isArray(config.browsers) ? config.browsers : [];
+    const isSafariRun = browsers.some(
+      (browser) => typeof browser === 'string' && /^Safari/i.test(browser),
+    );
+
+    // Safari in CI is more stable when the server advertises loopback.
+    // Other browsers continue to use the LAN IP (Firefox needs this).
+    const advAddr = isSafariRun ? '127.0.0.1' : getLanIp();
     const args = [
       '--ws-port', String(wsPort),
       '--udp-port-start', '0',
@@ -178,7 +183,7 @@ function createStr0mServerPlugin() {
       const allocatedPort = await findAvailablePort();
       console.log(`[str0m-server] Allocated WS port: ${allocatedPort}`);
 
-      const result = await startServer(binary, allocatedPort, projectRoot);
+      const result = await startServer(binary, allocatedPort, projectRoot, config);
       serverProc = result.proc;
       serverIp = result.ip;
       wsPort = result.port;
