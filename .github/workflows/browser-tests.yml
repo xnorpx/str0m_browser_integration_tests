@@ -57,7 +57,6 @@ jobs:
           # Windows
           - { os: windows-latest, os-label: Windows, os-slug: windows, crypto: aws-lc-rs,      artifact: server-windows-aws-lc-rs,      binary: target/release/server.exe }
           - { os: windows-latest, os-label: Windows, os-slug: windows, crypto: rust-crypto,    artifact: server-windows-rust-crypto,    binary: target/release/server.exe }
-          - { os: windows-latest, os-label: Windows, os-slug: windows, crypto: wincrypto,      artifact: server-windows-wincrypto,      binary: target/release/server.exe }
           - { os: windows-latest, os-label: Windows, os-slug: windows, crypto: wincrypto-dimpl, artifact: server-windows-wincrypto-dimpl, binary: target/release/server.exe }
     steps:
       - uses: actions/checkout@v6
