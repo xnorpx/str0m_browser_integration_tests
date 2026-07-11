@@ -160,35 +160,45 @@ async function runConnectAndVerify(testName: string, config: SessionConfig, allo
     const sendTime = performance.now();
 
     const echoPromise = new Promise<string>((resolve, reject) => {
-      const timeout = setTimeout(
-        () => reject(new Error('Timed out waiting for echo reply')),
-        ECHO_TIMEOUT_MS,
-      );
+      let settled = false;
+
+      const cleanup = () => {
+        settled = true;
+        clearTimeout(timeout);
+        clearInterval(retryTimer);
+      };
+
+      const sendPing = (label: string) => {
+        if (settled || dc!.readyState !== 'open') {
+          return;
+        }
+        dc!.send(PING_MESSAGE);
+        console.log(`[test] ${label}: "${PING_MESSAGE}"`);
+      };
+
+      const timeout = setTimeout(() => {
+        cleanup();
+        reject(new Error('Timed out waiting for echo reply'));
+      }, ECHO_TIMEOUT_MS);
+
+      const retryTimer = setInterval(() => {
+        sendPing('Retry sent');
+      }, 200);
+
       dc!.onmessage = (event) => {
         const data = typeof event.data === 'string' ? event.data : new TextDecoder().decode(event.data);
         if (data === PING_MESSAGE) {
-          clearTimeout(timeout);
+          cleanup();
           resolve(data);
         } else {
           console.log(`[test] Ignoring non-echo message: "${data}"`);
         }
       };
+
+      sendPing('Sent');
     });
 
-    dc!.send(PING_MESSAGE);
-    console.log(`[test] Sent: "${PING_MESSAGE}"`);
-
-    // Retry sending after 200ms in case Chrome's SCTP didn't flush the
-    // initial send (observed with ICE-lite on Linux headless Chrome).
-    const retryTimer = setTimeout(() => {
-      if (dc!.readyState === 'open') {
-        dc!.send(PING_MESSAGE);
-        console.log(`[test] Retry sent: "${PING_MESSAGE}"`);
-      }
-    }, 200);
-
     const echoReply = await echoPromise;
-    clearTimeout(retryTimer);
     const rttMs = performance.now() - sendTime;
 
     console.log(`[test] Echo: "${echoReply}" (RTT: ${rttMs.toFixed(2)}ms)`);
