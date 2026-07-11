@@ -1,5 +1,6 @@
 /target
 analysis/
+Cargo.lock
 web/node_modules/
 web/dist/
 __pycache__/
