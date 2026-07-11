@@ -57,7 +57,6 @@ jobs:
           # Windows
           - { os: windows-latest, os-label: Windows, os-slug: windows, crypto: aws-lc-rs,      artifact: server-windows-aws-lc-rs,      binary: target/release/server.exe }
           - { os: windows-latest, os-label: Windows, os-slug: windows, crypto: rust-crypto,    artifact: server-windows-rust-crypto,    binary: target/release/server.exe }
-          - { os: windows-latest, os-label: Windows, os-slug: windows, crypto: wincrypto,       artifact: server-windows-wincrypto,       binary: target/release/server.exe }
           - { os: windows-latest, os-label: Windows, os-slug: windows, crypto: wincrypto-dimpl, artifact: server-windows-wincrypto-dimpl, binary: target/release/server.exe }
     steps:
       - uses: actions/checkout@v6
@@ -143,7 +142,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        crypto: [aws-lc-rs, rust-crypto, openssl, openssl-dimpl, apple-crypto, wincrypto, wincrypto-dimpl]
+        crypto: [aws-lc-rs, rust-crypto, openssl, openssl-dimpl, apple-crypto, wincrypto-dimpl]
         test:
           - { name: "Base · Chrome",  script: "test:chrome" }
           - { name: "Base · Edge",    script: "test:edge" }
@@ -159,13 +158,9 @@ jobs:
           # apple-crypto only on macOS
           - { os: ubuntu-latest,  crypto: apple-crypto }
           - { os: windows-latest, crypto: apple-crypto }
-          # wincrypto only on Windows
-          - { os: ubuntu-latest,  crypto: wincrypto }
-          - { os: macos-latest,   crypto: wincrypto }
+          # wincrypto-dimpl only on Windows
           - { os: ubuntu-latest,  crypto: wincrypto-dimpl }
           - { os: macos-latest,   crypto: wincrypto-dimpl }
-          # wincrypto + Firefox: SChannel DTLS cipher mismatch
-          - { crypto: wincrypto, test: { name: "Base · Firefox", script: "test:firefox" } }
           # Safari only runs on macOS
           - { os: ubuntu-latest, test: { name: "Base · Safari", script: "test:safari" } }
           - { os: windows-latest, test: { name: "Base · Safari", script: "test:safari" } }
