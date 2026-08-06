@@ -6,7 +6,7 @@ use std::{
 use str0m::{
     Candidate, Event, Input, Output, Rtc, RtcConfig,
     change::{SdpAnswer, SdpOffer, SdpPendingOffer},
-    channel::ChannelId,
+    channel::{ChannelConfig, ChannelId},
     config::{DtlsCert, DtlsVersion},
     net::{Protocol, Receive},
 };
@@ -15,10 +15,7 @@ use tracing::{debug, info, warn};
 
 pub enum DataChannelAction {
     None,
-    Echo {
-        /// Send a "ready" beacon after ChannelOpen to trigger Chrome's SCTP output flush.
-        send_ready_beacon: bool,
-    },
+    Echo,
     SendAndExpectEcho {
         message: Vec<u8>,
         result_tx: oneshot::Sender<Option<Duration>>,
@@ -55,7 +52,9 @@ impl Peer {
         let socket = UdpSocket::from_std(std_socket)?;
         let local_addr = socket.local_addr()?;
 
-        let mut config = RtcConfig::new().set_snap_enabled(snap_enabled);
+        let mut config = RtcConfig::new()
+            .set_snap_enabled(snap_enabled)
+            .enable_dtls_over_ice(true);
 
         if let Some(v) = dtls_version {
             config = config.set_dtls_version(v);
@@ -89,7 +88,7 @@ impl Peer {
         channel_label: &str,
     ) -> Result<String, Box<dyn std::error::Error>> {
         let mut api = self.rtc.sdp_api();
-        let _cid = api.add_channel(channel_label.into());
+        let _cid = api.add_channel_with_config(negotiated_channel(channel_label));
         let (offer, pending) = api.apply().ok_or("No SDP changes to apply")?;
         self.pending_offer = Some(pending);
         let sdp = offer.to_sdp_string();
@@ -106,6 +105,9 @@ impl Peer {
     pub fn accept_offer(&mut self, sdp_offer: &str) -> Result<String, Box<dyn std::error::Error>> {
         let offer = SdpOffer::from_sdp_string(sdp_offer)?;
         let answer = self.rtc.sdp_api().accept_offer(offer)?;
+        self.rtc
+            .direct_api()
+            .create_data_channel(negotiated_channel("test-data"));
         let sdp = answer.to_sdp_string();
         info!(len = sdp.len(), "Created SDP answer");
         Ok(sdp)
@@ -138,7 +140,6 @@ impl Peer {
         let mut dc_channel_id: Option<ChannelId> = None;
         let mut pending_echo: Vec<(ChannelId, bool, Vec<u8>)> = Vec::new();
         let mut pending_send: Option<Vec<u8>> = None;
-        let mut pending_ready_beacon: bool = false;
         let mut expected_echo: Option<(Vec<u8>, oneshot::Sender<Option<Duration>>)> = None;
         let mut echo_send_time: Option<Instant> = None;
         tokio::pin!(shutdown);
@@ -195,24 +196,12 @@ impl Peer {
                                     pending_send = Some(message.clone());
                                     expected_echo = Some((message, result_tx));
                                 }
-                                other => {
-                                    if matches!(
-                                        other.as_ref(),
-                                        Some(DataChannelAction::Echo {
-                                            send_ready_beacon: true
-                                        })
-                                    ) {
-                                        pending_ready_beacon = true;
-                                    }
-                                    dc_action = other;
-                                }
+                                other => dc_action = other,
                             }
 
                             for (id, binary, data) in std::mem::take(&mut pending_echo) {
-                                if matches!(
-                                    dc_action.as_ref(),
-                                    Some(DataChannelAction::Echo { .. })
-                                ) && let Some(mut ch) = self.rtc.channel(id)
+                                if matches!(dc_action.as_ref(), Some(DataChannelAction::Echo))
+                                    && let Some(mut ch) = self.rtc.channel(id)
                                 {
                                     ch.write(binary, &data).map_err(|e| {
                                         format!("channel echo write (buffered): {e}")
@@ -226,7 +215,7 @@ impl Peer {
                             let text = String::from_utf8_lossy(&cd.data);
                             debug!(%role, %text, channel_id = ?cd.id, data_len = cd.data.len(), "ChannelData");
 
-                            if matches!(dc_action.as_ref(), Some(DataChannelAction::Echo { .. })) {
+                            if matches!(dc_action.as_ref(), Some(DataChannelAction::Echo)) {
                                 if dc_channel_id == Some(cd.id) {
                                     if let Some(mut ch) = self.rtc.channel(cd.id) {
                                         ch.write(cd.binary, &cd.data)
@@ -259,18 +248,6 @@ impl Peer {
                     Err(e) => return Err(format!("poll_output error: {e}")),
                 }
             };
-
-            if pending_ready_beacon {
-                if let Some(cid) = dc_channel_id
-                    && let Some(mut ch) = self.rtc.channel(cid)
-                {
-                    ch.write(false, b"ready")
-                        .map_err(|e| format!("ready beacon write: {e}"))?;
-                    info!(%role, "Sent ready beacon");
-                }
-                pending_ready_beacon = false;
-                continue;
-            }
 
             if let (Some(msg), Some(cid)) = (pending_send.take(), dc_channel_id)
                 && let Some(mut ch) = self.rtc.channel(cid)
@@ -414,4 +391,12 @@ fn now_us() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_micros() as u64
+}
+
+fn negotiated_channel(label: &str) -> ChannelConfig {
+    ChannelConfig {
+        label: label.into(),
+        negotiated: Some(0),
+        ..Default::default()
+    }
 }

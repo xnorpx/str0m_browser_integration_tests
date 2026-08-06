@@ -81,11 +81,10 @@ async function runConnectAndVerify(testName: string, config: SessionConfig, allo
 
     let pc: RTCPeerConnection;
     let dc: RTCDataChannel;
-    let dcPromise: Promise<RTCDataChannel> | undefined;
 
     if (config.client_sdp_role === 'offerer') {
       pc = new RTCPeerConnection({iceServers: []});
-      dc = pc.createDataChannel('test-data');
+      dc = pc.createDataChannel('test-data', {negotiated: true, id: 0});
 
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
@@ -102,17 +101,7 @@ async function runConnectAndVerify(testName: string, config: SessionConfig, allo
       await pc.setRemoteDescription({type: 'answer', sdp: answerSdp});
     } else {
       pc = new RTCPeerConnection({iceServers: []});
-
-      dcPromise = new Promise<RTCDataChannel>((resolve, reject) => {
-        const timeout = setTimeout(
-          () => reject(new Error('Timed out waiting for ondatachannel')),
-          ECHO_TIMEOUT_MS,
-        );
-        pc.ondatachannel = (event) => {
-          clearTimeout(timeout);
-          resolve(event.channel);
-        };
-      });
+      dc = pc.createDataChannel('test-data', {negotiated: true, id: 0});
 
       const offerMsg = await recvMsg(ws);
       const {sdp: offerSdp} = expectMsg(offerMsg, 'sdp');
@@ -134,28 +123,24 @@ async function runConnectAndVerify(testName: string, config: SessionConfig, allo
     const ready = await recvMsg(ws);
     expectMsg(ready, 'ready');
 
-    if (dcPromise) {
-      dc = await dcPromise;
-    }
-
-    if (dc!.readyState !== 'open') {
+    if (dc.readyState !== 'open') {
       await new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(
-          () => reject(new Error(`Data channel did not open (state: ${dc!.readyState})`)),
+          () => reject(new Error(`Data channel did not open (state: ${dc.readyState})`)),
           ECHO_TIMEOUT_MS,
         );
-        dc!.onopen = () => {
+        dc.onopen = () => {
           clearTimeout(timeout);
           resolve();
         };
-        if (dc!.readyState === 'open') {
+        if (dc.readyState === 'open') {
           clearTimeout(timeout);
           resolve();
         }
       });
     }
 
-    console.log(`[test] Data channel "${dc!.label}" is open`);
+    console.log(`[test] Data channel "${dc.label}" is open`);
 
     const sendTime = performance.now();
 
@@ -164,7 +149,7 @@ async function runConnectAndVerify(testName: string, config: SessionConfig, allo
         () => reject(new Error('Timed out waiting for echo reply')),
         ECHO_TIMEOUT_MS,
       );
-      dc!.onmessage = (event) => {
+      dc.onmessage = (event) => {
         const data = typeof event.data === 'string' ? event.data : new TextDecoder().decode(event.data);
         if (data === PING_MESSAGE) {
           clearTimeout(timeout);
@@ -175,14 +160,14 @@ async function runConnectAndVerify(testName: string, config: SessionConfig, allo
       };
     });
 
-    dc!.send(PING_MESSAGE);
+    dc.send(PING_MESSAGE);
     console.log(`[test] Sent: "${PING_MESSAGE}"`);
 
     // Retry sending after 200ms in case Chrome's SCTP didn't flush the
     // initial send (observed with ICE-lite on Linux headless Chrome).
     const retryTimer = setTimeout(() => {
-      if (dc!.readyState === 'open') {
-        dc!.send(PING_MESSAGE);
+      if (dc.readyState === 'open') {
+        dc.send(PING_MESSAGE);
         console.log(`[test] Retry sent: "${PING_MESSAGE}"`);
       }
     }, 200);
@@ -275,9 +260,18 @@ describe('str0m Browser Integration Tests', () => {
     });
   });
 
-  describe('Server DTLS Version Tests', () => {
-    it('should connect with server DTLS 1.2', async () => {
-      await runConnectAndVerify('dtls12_offerer_active_lite', {
+  describe('SPED DTLS Version Tests', () => {
+    it('should connect with DTLS Auto', async () => {
+      await runConnectAndVerify('sped_auto_offerer_active_lite', {
+        client_sdp_role: 'offerer',
+        server_ice_mode: 'lite',
+        client_dtls_role: 'active',
+        server_dtls_version: 'auto'
+      });
+    });
+
+    it('should connect with DTLS 1.2', async () => {
+      await runConnectAndVerify('sped_dtls12_offerer_active_lite', {
         client_sdp_role: 'offerer',
         server_ice_mode: 'lite',
         client_dtls_role: 'active',
@@ -290,7 +284,7 @@ describe('str0m Browser Integration Tests', () => {
         console.log('[test] Skipping DTLS 1.3 test on Safari');
         return;
       }
-      await runConnectAndVerify('dtls13_offerer_active_lite', {
+      await runConnectAndVerify('sped_dtls13_offerer_active_lite', {
         client_sdp_role: 'offerer',
         server_ice_mode: 'lite',
         client_dtls_role: 'active',
@@ -299,7 +293,7 @@ describe('str0m Browser Integration Tests', () => {
     });
 
     it('should connect with server DTLS 1.2 (answerer)', async () => {
-      await runConnectAndVerify('dtls12_answerer_active_lite', {
+      await runConnectAndVerify('sped_dtls12_answerer_active_lite', {
         client_sdp_role: 'answerer',
         server_ice_mode: 'lite',
         client_dtls_role: 'active',
@@ -312,7 +306,7 @@ describe('str0m Browser Integration Tests', () => {
         console.log('[test] Skipping DTLS 1.3 test on Safari');
         return;
       }
-      await runConnectAndVerify('dtls13_answerer_active_lite', {
+      await runConnectAndVerify('sped_dtls13_answerer_active_lite', {
         client_sdp_role: 'answerer',
         server_ice_mode: 'lite',
         client_dtls_role: 'active',

@@ -3,7 +3,6 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
 
-use str0m::config::DtlsVersion;
 use str0m_browser_integration_tests::peer::DataChannelAction;
 use str0m_browser_integration_tests::protocol::*;
 use str0m_browser_integration_tests::{Peer, Sessions, UdpPortAllocator};
@@ -69,15 +68,10 @@ async fn connect_ws(
 use str0m_browser_integration_tests::client;
 
 async fn run_connect_and_verify(test_name: &str, config: SessionConfig) {
-    run_connect_and_verify_full(test_name, config, true, None).await;
+    run_connect_and_verify_full(test_name, config, true).await;
 }
 
-async fn run_connect_and_verify_full(
-    test_name: &str,
-    config: SessionConfig,
-    snap_enabled: bool,
-    dtls_version: Option<DtlsVersion>,
-) {
+async fn run_connect_and_verify_full(test_name: &str, config: SessionConfig, snap_enabled: bool) {
     init();
 
     let ws_port = alloc_ws_port();
@@ -94,6 +88,11 @@ async fn run_connect_and_verify_full(
     let session_id = expect_msg!(Created { session_id } from msg);
     assert_eq!(session_id, sid);
 
+    let dtls_version = match config.server_dtls_version {
+        ServerDtlsVersion::Dtls12 => Some(str0m::config::DtlsVersion::Dtls12),
+        ServerDtlsVersion::Auto => None,
+        ServerDtlsVersion::Dtls13 => Some(str0m::config::DtlsVersion::Dtls13),
+    };
     let cert = str0m_browser_integration_tests::shared_dtls_cert();
     let mut client_peer =
         Peer::with_cert(false, LOCALHOST, 0, Some(cert), snap_enabled, dtls_version)
@@ -313,7 +312,6 @@ async fn snap_on_offerer_active_lite() {
             server_dtls_version: ServerDtlsVersion::Auto,
         },
         true,
-        None,
     )
     .await;
 }
@@ -329,7 +327,6 @@ async fn snap_off_offerer_active_lite() {
             server_dtls_version: ServerDtlsVersion::Auto,
         },
         false,
-        None,
     )
     .await;
 }
@@ -345,7 +342,6 @@ async fn snap_on_answerer_active_lite() {
             server_dtls_version: ServerDtlsVersion::Auto,
         },
         true,
-        None,
     )
     .await;
 }
@@ -361,19 +357,33 @@ async fn snap_off_answerer_active_lite() {
             server_dtls_version: ServerDtlsVersion::Auto,
         },
         false,
-        None,
     )
     .await;
 }
 
 // ---------------------------------------------------------------------------
-// DTLS version tests: verify connection with forced DTLS 1.2 and 1.3
+// SPED tests: verify DTLS-over-ICE with Auto, DTLS 1.2, and DTLS 1.3
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread")]
-async fn dtls12_offerer_active_lite() {
+async fn sped_auto_offerer_active_lite() {
     run_connect_and_verify_full(
-        "dtls12_offerer_active_lite",
+        "sped_auto_offerer_active_lite",
+        SessionConfig {
+            client_sdp_role: SdpRole::Offerer,
+            server_ice_mode: IceMode::Lite,
+            client_dtls_role: DtlsRole::Active,
+            server_dtls_version: ServerDtlsVersion::Auto,
+        },
+        true,
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sped_dtls12_offerer_active_lite() {
+    run_connect_and_verify_full(
+        "sped_dtls12_offerer_active_lite",
         SessionConfig {
             client_sdp_role: SdpRole::Offerer,
             server_ice_mode: IceMode::Lite,
@@ -381,15 +391,14 @@ async fn dtls12_offerer_active_lite() {
             server_dtls_version: ServerDtlsVersion::Dtls12,
         },
         true,
-        Some(DtlsVersion::Dtls12),
     )
     .await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn dtls12_answerer_active_lite() {
+async fn sped_dtls12_answerer_active_lite() {
     run_connect_and_verify_full(
-        "dtls12_answerer_active_lite",
+        "sped_dtls12_answerer_active_lite",
         SessionConfig {
             client_sdp_role: SdpRole::Answerer,
             server_ice_mode: IceMode::Lite,
@@ -397,7 +406,6 @@ async fn dtls12_answerer_active_lite() {
             server_dtls_version: ServerDtlsVersion::Dtls12,
         },
         true,
-        Some(DtlsVersion::Dtls12),
     )
     .await;
 }
@@ -405,7 +413,7 @@ async fn dtls12_answerer_active_lite() {
 /// DTLS 1.3 is only supported by `aws-lc-rs` and `rust-crypto` backends
 /// (and the `*-dimpl` variants). Other backends will fail to handshake.
 #[tokio::test(flavor = "multi_thread")]
-async fn dtls13_offerer_active_lite() {
+async fn sped_dtls13_offerer_active_lite() {
     let config = SessionConfig {
         client_sdp_role: SdpRole::Offerer,
         server_ice_mode: IceMode::Lite,
@@ -414,10 +422,9 @@ async fn dtls13_offerer_active_lite() {
     };
 
     let result = tokio::spawn(run_connect_and_verify_full(
-        "dtls13_offerer_active_lite",
+        "sped_dtls13_offerer_active_lite",
         config,
         true,
-        Some(DtlsVersion::Dtls13),
     ))
     .await;
 
@@ -426,14 +433,14 @@ async fn dtls13_offerer_active_lite() {
     // the handshake will fail - that's expected.
     if result.is_err() {
         eprintln!(
-            "dtls13_offerer_active_lite: expected failure (crypto backend may not support DTLS 1.3)"
+            "sped_dtls13_offerer_active_lite: expected failure (crypto backend may not support DTLS 1.3)"
         );
     }
 }
 
-/// DTLS 1.3 answerer variant - see dtls13_offerer_active_lite for details.
+/// DTLS 1.3 answerer variant - see sped_dtls13_offerer_active_lite for details.
 #[tokio::test(flavor = "multi_thread")]
-async fn dtls13_answerer_active_lite() {
+async fn sped_dtls13_answerer_active_lite() {
     let config = SessionConfig {
         client_sdp_role: SdpRole::Answerer,
         server_ice_mode: IceMode::Lite,
@@ -442,16 +449,15 @@ async fn dtls13_answerer_active_lite() {
     };
 
     let result = tokio::spawn(run_connect_and_verify_full(
-        "dtls13_answerer_active_lite",
+        "sped_dtls13_answerer_active_lite",
         config,
         true,
-        Some(DtlsVersion::Dtls13),
     ))
     .await;
 
     if result.is_err() {
         eprintln!(
-            "dtls13_answerer_active_lite: expected failure (crypto backend may not support DTLS 1.3)"
+            "sped_dtls13_answerer_active_lite: expected failure (crypto backend may not support DTLS 1.3)"
         );
     }
 }

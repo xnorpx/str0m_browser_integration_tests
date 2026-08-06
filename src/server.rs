@@ -86,9 +86,7 @@ pub async fn run_server(
                                             "server",
                                             connected_tx,
                                             open_tx,
-                                            DataChannelAction::Echo {
-                                                send_ready_beacon: true,
-                                            },
+                                            DataChannelAction::Echo,
                                             shutdown_rx,
                                         )
                                         .await

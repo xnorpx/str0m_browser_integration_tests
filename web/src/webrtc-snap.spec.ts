@@ -26,6 +26,10 @@ function getServerWsPort(): number {
   return 9090;
 }
 
+function isWarpMode(): boolean {
+  return Boolean((window as any).__karma__?.config?.warpMode);
+}
+
 /** Detect browser from user-agent. */
 function detectBrowser(): string {
   const ua = navigator.userAgent;
@@ -41,7 +45,8 @@ function detectBrowser(): string {
  */
 function allocSessionId(role: string): string {
   const browser = detectBrowser();
-  return `${browser}_snap_${role}`;
+  const mode = isWarpMode() ? 'warp_dtls13' : 'snap';
+  return `${browser}_${mode}_${role}`;
 }
 
 /** Assert a server message matches the expected type. */
@@ -67,28 +72,32 @@ async function runSnapTest(role: string, config: SessionConfig): Promise<void> {
   const ECHO_TIMEOUT_MS = 10000;
   const RTT_THRESHOLD_MS = 2000;
 
+  const effectiveConfig: SessionConfig = isWarpMode()
+    ? {...config, server_dtls_version: 'dtls13'}
+    : config;
+
   console.log(`[snap] ${role}: connecting to ${wsUrl}, session=${sid}`);
 
   const ws = await connectWs(wsUrl);
 
   try {
-    sendMsg(ws, {type: 'create', session_id: sid, config});
+    sendMsg(ws, {type: 'create', session_id: sid, config: effectiveConfig});
     const created = await recvMsg(ws);
     expectMsg(created, 'created');
 
     let pc: RTCPeerConnection;
     let dc: RTCDataChannel;
-    let dcPromise: Promise<RTCDataChannel> | undefined;
 
-    if (config.client_sdp_role === 'offerer') {
+    if (effectiveConfig.client_sdp_role === 'offerer') {
       pc = new RTCPeerConnection({iceServers: []});
-      dc = pc.createDataChannel('test-data');
+      dc = pc.createDataChannel('test-data', {negotiated: true, id: 0});
 
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       await waitForIceGathering(pc);
 
       const completeSdp = pc.localDescription!.sdp;
+      expect(completeSdp).withContext('SNAP offer must contain SCTP initialization parameters').toContain('a=sctp-init:');
       console.log(`[snap] Sending offer (${completeSdp.length} bytes)`);
 
       sendMsg(ws, {type: 'sdp', session_id: sid, sdp: completeSdp});
@@ -99,17 +108,7 @@ async function runSnapTest(role: string, config: SessionConfig): Promise<void> {
       await pc.setRemoteDescription({type: 'answer', sdp: answerSdp});
     } else {
       pc = new RTCPeerConnection({iceServers: []});
-
-      dcPromise = new Promise<RTCDataChannel>((resolve, reject) => {
-        const timeout = setTimeout(
-          () => reject(new Error('Timed out waiting for ondatachannel')),
-          ECHO_TIMEOUT_MS,
-        );
-        pc.ondatachannel = (event) => {
-          clearTimeout(timeout);
-          resolve(event.channel);
-        };
-      });
+      dc = pc.createDataChannel('test-data', {negotiated: true, id: 0});
 
       const offerMsg = await recvMsg(ws);
       const {sdp: offerSdp} = expectMsg(offerMsg, 'sdp');
@@ -122,6 +121,7 @@ async function runSnapTest(role: string, config: SessionConfig): Promise<void> {
       await waitForIceGathering(pc);
 
       const completeSdp = pc.localDescription!.sdp;
+      expect(completeSdp).withContext('SNAP answer must contain SCTP initialization parameters').toContain('a=sctp-init:');
       console.log(`[snap] Sending answer (${completeSdp.length} bytes)`);
 
       sendMsg(ws, {type: 'sdp', session_id: sid, sdp: completeSdp});
@@ -131,28 +131,24 @@ async function runSnapTest(role: string, config: SessionConfig): Promise<void> {
     const ready = await recvMsg(ws);
     expectMsg(ready, 'ready');
 
-    if (dcPromise) {
-      dc = await dcPromise;
-    }
-
-    if (dc!.readyState !== 'open') {
+    if (dc.readyState !== 'open') {
       await new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(
-          () => reject(new Error(`Data channel did not open (state: ${dc!.readyState})`)),
+          () => reject(new Error(`Data channel did not open (state: ${dc.readyState})`)),
           ECHO_TIMEOUT_MS,
         );
-        dc!.onopen = () => {
+        dc.onopen = () => {
           clearTimeout(timeout);
           resolve();
         };
-        if (dc!.readyState === 'open') {
+        if (dc.readyState === 'open') {
           clearTimeout(timeout);
           resolve();
         }
       });
     }
 
-    console.log(`[snap] Data channel "${dc!.label}" is open`);
+    console.log(`[snap] Data channel "${dc.label}" is open`);
 
     const sendTime = performance.now();
 
@@ -161,7 +157,7 @@ async function runSnapTest(role: string, config: SessionConfig): Promise<void> {
         () => reject(new Error('Timed out waiting for echo reply')),
         ECHO_TIMEOUT_MS,
       );
-      dc!.onmessage = (event) => {
+      dc.onmessage = (event) => {
         const data = typeof event.data === 'string'
           ? event.data
           : new TextDecoder().decode(event.data);
@@ -174,12 +170,12 @@ async function runSnapTest(role: string, config: SessionConfig): Promise<void> {
       };
     });
 
-    dc!.send(PING_MESSAGE);
+    dc.send(PING_MESSAGE);
     console.log(`[snap] Sent: "${PING_MESSAGE}"`);
 
     const retryTimer = setTimeout(() => {
-      if (dc!.readyState === 'open') {
-        dc!.send(PING_MESSAGE);
+      if (dc.readyState === 'open') {
+        dc.send(PING_MESSAGE);
         console.log(`[snap] Retry sent: "${PING_MESSAGE}"`);
       }
     }, 200);

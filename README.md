@@ -1,6 +1,6 @@
 # str0m Browser Integration Tests
 
-End-to-end WebRTC integration tests for [str0m](https://github.com/algesten/str0m), exercising **ICE**, **DTLS**, **SCTP**, and **DataChannel** negotiation between a Rust server and real browsers (Chrome, Edge, Firefox, Safari). All sessions are packet-captured and analyzed to count **round-trip times (RTTs)** — making this the primary observatory for measuring the connection-setup improvements delivered by **DTLS 1.3** and **SNAP**.
+End-to-end WebRTC integration tests for [str0m](https://github.com/algesten/str0m), exercising **ICE**, **DTLS**, **SCTP**, and **DataChannel** negotiation between a Rust server and real browsers (Chrome, Edge, Firefox, Safari). All sessions are packet-captured and analyzed to count **round-trip times (RTTs)**, including the connection-setup improvements delivered by **SPED**, **DTLS 1.3**, and **SNAP**.
 
 ## The Problem: 6 RTTs to Open a Data Channel
 
@@ -25,11 +25,12 @@ WebRTC connection setup can be optimized using orthogonal, backwards-compatible 
 |---|---|:---:|
 | **SNAP** | SCTP was designed as L4 with anti-hijack/DDoS mechanisms (cookie exchange). Under DTLS these are redundant. SNAP removes the SCTP 4-way handshake entirely, exchanging init params declaratively via SDP. | **-2 RTT** |
 | **DTLS 1.3** ([RFC 9147](https://datatracker.ietf.org/doc/rfc9147/)) | Reduces the DTLS handshake from 2 RTTs to 1 RTT. | **-1 RTT** |
-| **Combined** | SNAP + DTLS 1.3 | **-3 RTT** |
+| **SPED** | Starts DTLS inside authenticated ICE connectivity checks, overlapping the ICE and DTLS handshakes. | **-1 RTT** |
+| **Combined** | SPED + SNAP + DTLS 1.3 | **-4 RTT** |
 
 This repo captures pcaps from every test permutation so we can **observe and quantify** these improvements as str0m and browsers add support.
 
-> **Note:** DTLS 1.3 is enabled by default in Chrome/Edge since Oct 2025. str0m supports DTLS 1.3 via the `aws-lc-rs` and `rust-crypto` backends (using `DtlsVersion::Auto`). SNAP is verified both in browser tests and native Rust-to-Rust tests. Safari is tested natively on macOS via `safaridriver`, though explicit DTLS 1.3 and SNAP tests are currently skipped as Safari does not yet fully support these natively.
+> **Note:** SPED is the DTLS-over-ICE component of WARP. str0m enables it with `RtcConfig::enable_dtls_over_ice(true)`, while Chrome and Edge require the `WebRTC-IceHandshakeDtls/Enabled/` field trial. The suite tests SPED with matching DTLS Auto, 1.2, and 1.3 configurations; it never pairs a DTLS 1.2-only peer with a DTLS 1.3-only peer.
 
 ## Architecture Overview
 
@@ -79,7 +80,7 @@ graph LR
 
     subgraph "TypeScript (web/src)"
         spec_base["webrtc-client.spec.ts<br/>Base browser tests"]
-        spec_warp["webrtc-warp.spec.ts<br/>SNAP/DTLS 1.3 tests"]
+        spec_warp["webrtc-snap.spec.ts<br/>SNAP/WARP tests"]
         ts_proto["protocol.ts<br/>Message types"]
         ts_signal["signaling.ts<br/>WS client"]
     end
@@ -165,6 +166,11 @@ sequenceDiagram
 
 The following diagrams show the connection flow improvements.
 
+The optimized tests configure `test-data` out of band on SCTP stream `0` at both
+endpoints (`negotiated: true` in browsers and `ChannelConfig::negotiated` in
+str0m). SNAP pre-negotiates the SCTP association through SDP, while the fixed
+stream ID separately removes the DCEP Open/ACK exchange.
+
 ### Current WebRTC Setup (6 RTTs to Data Channel)
 
 ```mermaid
@@ -223,8 +229,8 @@ sequenceDiagram
     A-->>O: DTLS ServerHello/Fin
     Note right of A: RTT 3 — DTLS done, data ready
 
-    O->>A: DTLS Finished + DCEP Open + "hello"
-    A-->>O: DCEP ACK + "world"
+    O->>A: DTLS Finished + first application data
+    A-->>O: Application response
 ```
 
 ### DTLS 1.3 + SNAP (Minimal RTTs)
@@ -244,9 +250,9 @@ sequenceDiagram
     S-->>C: ICE Response + DTLS ServerHello/Fin
     Note right of S: RTT 2 — ICE + DTLS done
 
-    C->>S: DTLS Finished + DCEP Open + "hello"
-    S-->>C: DCEP ACK + "world"
-    Note left of C: Data ready (2.5 RTT)
+    C->>S: DTLS Finished + first application data
+    Note left of S: First data received (2.5 RTT)
+    S-->>C: Application response
 ```
 
 ### RTT Summary
@@ -301,16 +307,17 @@ Every base test verifies a full WebRTC connection by sending `"hello from browse
 | `answerer_active_lite` | Server offers | Browser = DTLS client | Server ICE-Lite |
 | `answerer_active_full` | Server offers | Browser = DTLS client | Server ICE-Full |
 
-### Feature Tests (SNAP / DTLS 1.3)
+### Feature Tests (SPED / SNAP / DTLS 1.3)
 
 Experimental Chromium field trials are enabled via browser flags:
 
 | Feature | Chromium Flag | What it Does | Spec |
 |---------|---------------|--------------|------|
+| **SPED** | `WebRTC-IceHandshakeDtls/Enabled/` | Carries DTLS handshake records inside authenticated ICE connectivity checks | [str0m issue #809](https://github.com/algesten/str0m/issues/809) |
 | **SNAP** | `WebRTC-Sctp-Snap/Enabled/` | Removes SCTP 4-way handshake; init params exchanged in SDP | [draft-hancke-tsvwg-snap](https://datatracker.ietf.org/doc/draft-hancke-tsvwg-snap/) |
-| **Combined** | SNAP + DTLS 1.3 | SNAP + DTLS 1.3 = minimal RTT setup | N/A |
+| **Combined** | SPED + SNAP + DTLS 1.3 | Overlaps ICE/DTLS and removes the SCTP handshake | N/A |
 
-Each feature test runs `offerer` and `answerer` variants against ICE-Lite.
+The focused SPED matrix runs DTLS Auto, DTLS 1.2, and DTLS 1.3. Forced native versions are applied to both peers, while browser tests let Chromium negotiate the matching version with the configured server. Offerer and answerer variants run against ICE-Lite.
 
 > **ICE Lite is RECOMMENDED for optimized servers** (for minimal RTTs): a Lite server can respond immediately without waiting for its own connectivity check, enabling minimal RTTs.
 
@@ -371,13 +378,14 @@ The full CI runs **~63 test jobs** (after exclusions for platform-specific crypt
 │   └── integration.rs             # Native Rust-to-Rust integration tests
 ├── web/
 │   ├── karma.conf.js              # Karma config (base browser tests)
-    └── karma.warp.conf.js         # Karma config (SNAP/DTLS 1.3 tests)
+│   ├── karma.snap.conf.js         # Karma config (SNAP and WARP launchers)
+│   ├── karma.warp.conf.js         # Enables combined WARP mode
 │   ├── plugins/                   # karma-str0m-server, karma-edge-launcher
 │   └── src/
 │       ├── protocol.ts            # TS mirror of protocol.rs
 │       ├── signaling.ts           # WS client for browsers
 │       ├── webrtc-client.spec.ts  # Base test suite (6 test cases)
-│       └── webrtc-warp.spec.ts    # Feature test suite (6 test cases)
+│       └── webrtc-snap.spec.ts    # SNAP/WARP feature tests (2 test cases)
 ├── target/pcap/                   # Captured pcapng files (gitignored)
 ├── Cargo.toml                     # Rust deps (str0m from git)
 └── package.json                   # Root npm scripts (delegates to web/)
@@ -431,8 +439,12 @@ cargo test --release
 cd web && npm ci
 npm run test:chrome
 
-# Run DTLS1.3/SNAP feature tests
-npm run test:warp:chrome
+# Run SPED with its Chromium field trial
+npm run test:sped:chrome
+npm run test:sped:edge
+
+# Run SNAP feature tests
+npm run test:snap:chrome
 
 # Analyze captured pcaps
 pip install matplotlib numpy
@@ -476,13 +488,15 @@ Expected progression as str0m adds support:
 | Baseline (DTLS 1.2) | **6** | 1 sig + 1–1.5 ICE + 2 DTLS + 2 SCTP | Full ICE with non-aggressive nomination |
 | DTLS 1.3 | **5** | 1 sig + 1–1.5 ICE + 1 DTLS + 2 SCTP | Chrome/Edge default since Oct 2025 |
 | + SNAP | **3** | 1 sig + 1 ICE + 1 DTLS | SNAP removes SCTP handshake entirely |
-| **Full DTLS 1.3 + SNAP** | **2** | 1 sig + 1 ICE/DTLS | SNAP + DTLS 1.3 |
+| + SPED | **2** | 1 sig + 1 ICE/DTLS | SPED overlaps ICE and DTLS |
+| **Full WARP** | **2** | 1 sig + 1 ICE/DTLS | SPED + SNAP + DTLS 1.3 |
 
 > With **ICE Lite** (recommended for minimal RTTs), the server is ready to send at **1.5 RTT** — it doesn't need to wait for its own triggered check.
 
 ## References
 
 - **SNAP** — [draft-hancke-tsvwg-snap](https://datatracker.ietf.org/doc/draft-hancke-tsvwg-snap/) — SCTP Negotiation Acceleration Protocol
+- **SPED / WARP status** — [str0m issue #809](https://github.com/algesten/str0m/issues/809)
 - **DTLS 1.3** — [RFC 9147](https://datatracker.ietf.org/doc/rfc9147/)
 - **str0m** — [github.com/algesten/str0m](https://github.com/algesten/str0m)
 - **WebRTC Data Channels** — [RFC 8831](https://datatracker.ietf.org/doc/rfc8831/) (the protocol sandwich, Section 5)

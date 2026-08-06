@@ -148,7 +148,11 @@ jobs:
           - { name: "Base · Edge",    script: "test:edge" }
           - { name: "Base · Firefox", script: "test:firefox" }
           - { name: "Base · Safari",  script: "test:safari" }
+          - { name: "SPED · Chrome",  script: "test:sped:chrome" }
+          - { name: "SPED · Edge",    script: "test:sped:edge" }
           - { name: "SNAP · Chrome",  script: "test:snap:chrome" }
+          - { name: "WARP · Chrome",  script: "test:warp:chrome" }
+          - { name: "WARP · Edge",    script: "test:warp:edge" }
         exclude:
           # OpenSSL only on Linux
           - { os: macos-latest,   crypto: openssl }

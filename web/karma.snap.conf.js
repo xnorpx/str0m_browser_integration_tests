@@ -10,6 +10,7 @@
  */
 
 const webpackConfig = require('./webpack.config');
+const warpMode = process.env.STR0M_WARP === '1';
 
 module.exports = function (config) {
   const chromeBaseFlags = [
@@ -48,14 +49,23 @@ module.exports = function (config) {
       stats: 'errors-only',
     },
 
-    browsers: ['ChromeHeadlessSNAP'],
+    browsers: [warpMode ? 'ChromeHeadlessWARP' : 'ChromeHeadlessSNAP'],
 
     customLaunchers: {
       ChromeHeadlessSNAP: {
         base: 'ChromeHeadless',
         flags: [
           ...chromeBaseFlags,
+          '--enable-features=WebRtcSctpSnap',
           '--force-fieldtrials=WebRTC-Sctp-Snap/Enabled/',
+        ],
+      },
+      ChromeHeadlessWARP: {
+        base: 'ChromeHeadless',
+        flags: [
+          ...chromeBaseFlags,
+          '--enable-features=WebRtcSctpSnap',
+          '--force-fieldtrials=WebRTC-IceHandshakeDtls/Enabled/WebRTC-ForceDtls13/Enabled/WebRTC-Sctp-Snap/Enabled/',
         ],
       },
       EdgeHeadlessSNAP: {
@@ -64,6 +74,14 @@ module.exports = function (config) {
           ...chromeBaseFlags,
           '--enable-features=WebRtcSctpSnap',
           '--force-fieldtrials=WebRTC-Sctp-Snap/Enabled/',
+        ],
+      },
+      EdgeHeadlessWARP: {
+        base: 'EdgeHeadless',
+        flags: [
+          ...chromeBaseFlags,
+          '--enable-features=WebRtcSctpSnap',
+          '--force-fieldtrials=WebRTC-IceHandshakeDtls/Enabled/WebRTC-ForceDtls13/Enabled/WebRTC-Sctp-Snap/Enabled/',
         ],
       },
     },
@@ -82,6 +100,7 @@ module.exports = function (config) {
     concurrency: 1,
 
     client: {
+      warpMode,
       jasmine: {
         random: false,
         timeoutInterval: 30000,

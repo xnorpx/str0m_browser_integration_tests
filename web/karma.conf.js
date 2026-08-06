@@ -63,6 +63,23 @@ module.exports = function (config) {
           '--autoplay-policy=no-user-gesture-required',
         ],
       },
+      ChromeHeadlessSPED: {
+        base: 'ChromeHeadless',
+        flags: [
+          '--disable-features=WebRtcHideLocalIpsWithMdns',
+          '--disable-background-timer-throttling',
+          '--disable-renderer-backgrounding',
+          '--no-sandbox',
+          '--autoplay-policy=no-user-gesture-required',
+          '--force-fieldtrials=WebRTC-IceHandshakeDtls/Enabled/',
+        ],
+      },
+      EdgeHeadlessSPED: {
+        base: 'EdgeHeadless',
+        flags: [
+          '--force-fieldtrials=WebRTC-IceHandshakeDtls/Enabled/',
+        ],
+      },
       FirefoxHeadlessWebRTC: {
         base: 'FirefoxHeadless',
         prefs: {

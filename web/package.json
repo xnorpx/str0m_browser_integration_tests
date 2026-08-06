@@ -9,8 +9,12 @@
     "test:edge": "karma start karma.conf.js --single-run --browsers EdgeHeadless",
     "test:firefox": "karma start karma.conf.js --single-run --browsers FirefoxHeadless",
     "test:safari": "karma start karma.conf.js --single-run --browsers Safari",
+    "test:sped:chrome": "karma start karma.conf.js --single-run --browsers ChromeHeadlessSPED",
+    "test:sped:edge": "karma start karma.conf.js --single-run --browsers EdgeHeadlessSPED",
     "test:snap:chrome": "karma start karma.snap.conf.js --single-run --browsers ChromeHeadlessSNAP",
-    "test:snap:edge": "karma start karma.snap.conf.js --single-run --browsers EdgeHeadlessSNAP"
+    "test:snap:edge": "karma start karma.snap.conf.js --single-run --browsers EdgeHeadlessSNAP",
+    "test:warp:chrome": "karma start karma.warp.conf.js --single-run --browsers ChromeHeadlessWARP",
+    "test:warp:edge": "karma start karma.warp.conf.js --single-run --browsers EdgeHeadlessWARP"
   },
   "devDependencies": {
     "@types/jasmine": "^5.1.0",
