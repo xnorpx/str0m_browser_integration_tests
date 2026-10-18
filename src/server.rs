@@ -1,20 +1,48 @@
 use crate::{
     Session, Sessions, UdpPortAllocator,
+    netem::session_seed,
     peer::{DataChannelAction, Peer},
     protocol::*,
 };
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
+use std::time::Duration;
 use std::{
-    net::IpAddr,
+    net::{IpAddr, SocketAddr},
     sync::{Arc, Mutex},
 };
-use tokio::net::TcpListener;
+use str0m::config::DtlsVersion;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{info, warn};
 
-type RunningSessions = Arc<Mutex<HashMap<String, oneshot::Sender<()>>>>;
+/// How long `destroy` waits for a running peer to stop and hand over its report.
+const REPORT_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Server-wide settings.
+#[derive(Debug, Clone, Default)]
+pub struct ServerOptions {
+    /// Netem for sessions that don't send their own `server_netem`.
+    pub default_netem: Option<NetemSettings>,
+}
+
+struct RunningPeer {
+    shutdown: oneshot::Sender<()>,
+    report: oneshot::Receiver<SessionReport>,
+}
+
+impl RunningPeer {
+    async fn stop(self) -> Option<SessionReport> {
+        let _ = self.shutdown.send(());
+        tokio::time::timeout(REPORT_TIMEOUT, self.report)
+            .await
+            .ok()?
+            .ok()
+    }
+}
+
+type RunningSessions = Arc<Mutex<HashMap<String, RunningPeer>>>;
 
 enum ServerAction {
     None,
@@ -32,11 +60,19 @@ pub async fn run_server(
     sessions: Sessions,
     adv_addr: IpAddr,
     udp_ports: Arc<UdpPortAllocator>,
+    options: ServerOptions,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let bind_addr = format!("0.0.0.0:{ws_port}");
     let listener = TcpListener::bind(&bind_addr).await?;
     let running: RunningSessions = Arc::new(Mutex::new(HashMap::new()));
+    let options = Arc::new(options);
 
+    info!(
+        crypto = crate::crypto_backend_name(),
+        dtls13 = crate::dtls13_supported(),
+        default_netem = ?options.default_netem,
+        "Server capabilities"
+    );
     println!("SERVER READY ws://{adv_addr}:{ws_port}");
     info!(%adv_addr, "WebSocket server listening on {bind_addr}");
 
@@ -44,93 +80,174 @@ pub async fn run_server(
         let (stream, peer) = listener.accept().await?;
         info!(%peer, "New TCP connection");
 
-        let sessions = sessions.clone();
-        let running = running.clone();
-        let udp_ports = udp_ports.clone();
-        tokio::spawn(async move {
-            let ws_stream = match tokio_tungstenite::accept_async(stream).await {
-                Ok(ws) => ws,
-                Err(e) => {
-                    warn!(%peer, "WebSocket handshake failed: {e}");
-                    return;
+        tokio::spawn(handle_connection(
+            stream,
+            peer,
+            sessions.clone(),
+            running.clone(),
+            udp_ports.clone(),
+            adv_addr,
+            options.clone(),
+        ));
+    }
+}
+
+async fn handle_connection(
+    stream: TcpStream,
+    peer: SocketAddr,
+    sessions: Sessions,
+    running: RunningSessions,
+    udp_ports: Arc<UdpPortAllocator>,
+    adv_addr: IpAddr,
+    options: Arc<ServerOptions>,
+) {
+    let ws_stream = match tokio_tungstenite::accept_async(stream).await {
+        Ok(ws) => ws,
+        Err(e) => {
+            warn!(%peer, "WebSocket handshake failed: {e}");
+            return;
+        }
+    };
+    info!(%peer, "WebSocket connection established");
+
+    let (mut sink, mut stream) = ws_stream.split();
+    // Sessions created on this connection and not destroyed yet.
+    let mut owned: Vec<String> = Vec::new();
+
+    while let Some(msg) = stream.next().await {
+        match msg {
+            Ok(Message::Text(text)) => {
+                let (mut responses, action) =
+                    handle_client_message(&sessions, &text, adv_addr, &udp_ports, &options);
+
+                for response in &responses {
+                    if let ServerMessage::Created { session_id } = response {
+                        owned.push(session_id.clone());
+                    }
                 }
-            };
-            info!(%peer, "WebSocket connection established");
 
-            let (mut sink, mut stream) = ws_stream.split();
-
-            while let Some(msg) = stream.next().await {
-                match msg {
-                    Ok(Message::Text(text)) => {
-                        let (responses, action) =
-                            handle_client_message(&sessions, &text, adv_addr, &udp_ports);
-
-                        match action {
-                            ServerAction::SpawnPeer {
-                                session_id,
-                                mut session,
-                            } => {
-                                let (shutdown_tx, shutdown_rx) = oneshot::channel();
-                                running
-                                    .lock()
-                                    .expect("running sessions lock poisoned")
-                                    .insert(session_id.clone(), shutdown_tx);
-                                let sid = session_id;
-                                tokio::spawn(async move {
-                                    let (connected_tx, _) = oneshot::channel();
-                                    let (open_tx, _) = oneshot::channel();
-                                    if let Err(e) = session
-                                        .peer
-                                        .run(
-                                            &sid,
-                                            "server",
-                                            connected_tx,
-                                            open_tx,
-                                            DataChannelAction::Echo {
-                                                send_ready_beacon: true,
-                                            },
-                                            shutdown_rx,
-                                        )
-                                        .await
-                                    {
-                                        warn!(session_id = %sid, "Peer event loop error: {e}");
-                                    }
-                                });
-                            }
-                            ServerAction::StopPeer { session_id } => {
-                                let value = running
-                                    .lock()
-                                    .expect("running sessions lock poisoned")
-                                    .remove(&session_id);
-                                if let Some(tx) = value {
-                                    let _ = tx.send(());
+                match action {
+                    ServerAction::SpawnPeer {
+                        session_id,
+                        session,
+                    } => spawn_peer(&running, session_id, session),
+                    ServerAction::StopPeer { session_id } => {
+                        owned.retain(|id| *id != session_id);
+                        let running_peer = running
+                            .lock()
+                            .expect("running sessions lock poisoned")
+                            .remove(&session_id);
+                        if let Some(running_peer) = running_peer {
+                            let report = running_peer.stop().await;
+                            for response in &mut responses {
+                                if let ServerMessage::Destroyed {
+                                    session_id: id,
+                                    report: slot,
+                                } = response
+                                    && *id == session_id
+                                {
+                                    slot.clone_from(&report);
                                 }
                             }
-                            ServerAction::None => {}
                         }
+                    }
+                    ServerAction::None => {}
+                }
 
-                        for response in responses {
-                            let json =
-                                serde_json::to_string(&response).expect("failed to serialize");
-                            if let Err(e) = sink.send(Message::Text(json.into())).await {
-                                warn!(%peer, "Send failed: {e}");
-                                break;
-                            }
-                        }
-                    }
-                    Ok(Message::Close(_)) => {
-                        info!(%peer, "Connection closed");
-                        break;
-                    }
-                    Ok(_) => {} // ignore binary/ping/pong
-                    Err(e) => {
-                        warn!(%peer, "Error: {e}");
+                for response in responses {
+                    let json = serde_json::to_string(&response).expect("failed to serialize");
+                    if let Err(e) = sink.send(Message::Text(json.into())).await {
+                        warn!(%peer, "Send failed: {e}");
                         break;
                     }
                 }
             }
-        });
+            Ok(Message::Close(_)) => {
+                info!(%peer, "Connection closed");
+                break;
+            }
+            Ok(_) => {} // ignore binary/ping/pong
+            Err(e) => {
+                warn!(%peer, "Error: {e}");
+                break;
+            }
+        }
     }
+
+    // Don't leave peers (and their netem timers) running for clients that went away.
+    for session_id in owned {
+        sessions
+            .lock()
+            .expect("sessions lock poisoned")
+            .remove(&session_id);
+        let running_peer = running
+            .lock()
+            .expect("running sessions lock poisoned")
+            .remove(&session_id);
+        if let Some(running_peer) = running_peer {
+            info!(%peer, %session_id, "Stopping peer left behind by closed connection");
+            running_peer.stop().await;
+        }
+    }
+}
+
+fn spawn_peer(running: &RunningSessions, session_id: String, mut session: Box<Session>) {
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let (report_tx, report_rx) = oneshot::channel();
+    running
+        .lock()
+        .expect("running sessions lock poisoned")
+        .insert(
+            session_id.clone(),
+            RunningPeer {
+                shutdown: shutdown_tx,
+                report: report_rx,
+            },
+        );
+    tokio::spawn(async move {
+        let (connected_tx, _) = oneshot::channel();
+        let (open_tx, _) = oneshot::channel();
+        let report = session
+            .peer
+            .run(
+                &session_id,
+                "server",
+                connected_tx,
+                open_tx,
+                DataChannelAction::Echo {
+                    send_ready_beacon: true,
+                },
+                shutdown_rx,
+            )
+            .await;
+        let _ = report_tx.send(report);
+    });
+}
+
+/// Map the requested version onto what the crypto backend can do. `RtcConfig::build`
+/// panics on versions the backend rejects, so this must never hand out an unsupported one.
+fn resolve_dtls_version(requested: ServerDtlsVersion) -> Result<DtlsVersion, String> {
+    let dtls13 = crate::dtls13_supported();
+    match requested {
+        ServerDtlsVersion::Dtls12 => Ok(DtlsVersion::Dtls12),
+        ServerDtlsVersion::Auto if dtls13 => Ok(DtlsVersion::Auto),
+        // Auto-negotiation on a DTLS 1.2 only backend can only ever end up at 1.2.
+        ServerDtlsVersion::Auto => Ok(DtlsVersion::Dtls12),
+        ServerDtlsVersion::Dtls13 if dtls13 => Ok(DtlsVersion::Dtls13),
+        ServerDtlsVersion::Dtls13 => {
+            Err("Backend does not support DTLS 1.3. Skipping test.".to_string())
+        }
+    }
+}
+
+fn error_response(session_id: String, message: String) -> (Vec<ServerMessage>, ServerAction) {
+    (
+        vec![ServerMessage::Error {
+            session_id: Some(session_id),
+            message,
+        }],
+        ServerAction::None,
+    )
 }
 
 fn handle_client_message(
@@ -138,6 +255,7 @@ fn handle_client_message(
     text: &str,
     adv_addr: IpAddr,
     udp_ports: &UdpPortAllocator,
+    options: &ServerOptions,
 ) -> (Vec<ServerMessage>, ServerAction) {
     let msg: ClientMessage = match serde_json::from_str(text) {
         Ok(m) => m,
@@ -157,48 +275,37 @@ fn handle_client_message(
         ClientMessage::Create { session_id, config } => {
             info!(%session_id, ?config, "Creating session");
 
-            let ice_lite = config.server_ice_mode == IceMode::Lite;
-            let udp_port = udp_ports.next_port();
-            let cert = crate::shared_dtls_cert();
-            if config.server_dtls_version == ServerDtlsVersion::Dtls13 {
-                let supports_dtls13 = cfg!(any(
-                    feature = "aws-lc-rs",
-                    feature = "rust-crypto",
-                    feature = "openssl-dimpl",
-                    feature = "wincrypto-dimpl"
-                ));
-                if !supports_dtls13 {
-                    return (
-                        vec![ServerMessage::Error {
-                            session_id: Some(session_id),
-                            message: "Backend does not support DTLS 1.3. Skipping test."
-                                .to_string(),
-                        }],
-                        ServerAction::None,
-                    );
-                }
+            let dtls_version = match resolve_dtls_version(config.server_dtls_version) {
+                Ok(v) => v,
+                Err(message) => return error_response(session_id, message),
+            };
+            let netem = config
+                .server_netem
+                .clone()
+                .or_else(|| options.default_netem.clone());
+            if let Some(Err(e)) = netem.as_ref().map(NetemSettings::validate) {
+                return error_response(session_id, format!("Invalid server_netem: {e}"));
             }
 
-            let dtls_version = match config.server_dtls_version {
-                ServerDtlsVersion::Dtls12 => Some(str0m::config::DtlsVersion::Dtls12),
-                ServerDtlsVersion::Auto => None,
-                ServerDtlsVersion::Dtls13 => Some(str0m::config::DtlsVersion::Dtls13),
-            };
+            let ice_lite = config.server_ice_mode == IceMode::Lite;
+            let snap_enabled = config.server_snap.unwrap_or(true);
+            let udp_port = udp_ports.next_port();
+            let cert = crate::shared_dtls_cert();
 
-            let mut peer =
-                match Peer::with_cert(ice_lite, adv_addr, udp_port, Some(cert), true, dtls_version)
-                {
-                    Ok(p) => p,
-                    Err(e) => {
-                        return (
-                            vec![ServerMessage::Error {
-                                session_id: Some(session_id),
-                                message: format!("Failed to create peer: {e}"),
-                            }],
-                            ServerAction::None,
-                        );
-                    }
-                };
+            let mut peer = match Peer::with_cert(
+                ice_lite,
+                adv_addr,
+                udp_port,
+                Some(cert),
+                snap_enabled,
+                Some(dtls_version),
+            ) {
+                Ok(p) => p,
+                Err(e) => return error_response(session_id, format!("Failed to create peer: {e}")),
+            };
+            if let Some(netem) = netem {
+                peer.set_netem(netem, session_seed(&session_id));
+            }
 
             let mut responses = vec![ServerMessage::Created {
                 session_id: session_id.clone(),
@@ -213,21 +320,18 @@ fn handle_client_message(
                         });
                     }
                     Err(e) => {
-                        return (
-                            vec![ServerMessage::Error {
-                                session_id: Some(session_id),
-                                message: format!("Failed to create offer: {e}"),
-                            }],
-                            ServerAction::None,
-                        );
+                        return error_response(session_id, format!("Failed to create offer: {e}"));
                     }
                 }
             }
 
-            sessions
-                .lock()
-                .expect("sessions lock poisoned")
-                .insert(session_id, Session { config, peer });
+            sessions.lock().expect("sessions lock poisoned").insert(
+                session_id,
+                Session {
+                    config: *config,
+                    peer,
+                },
+            );
 
             (responses, ServerAction::None)
         }
@@ -241,10 +345,20 @@ fn handle_client_message(
             (
                 vec![ServerMessage::Destroyed {
                     session_id: session_id.clone(),
+                    report: None,
                 }],
                 ServerAction::StopPeer { session_id },
             )
         }
+
+        ClientMessage::Info => (
+            vec![ServerMessage::Info {
+                crypto: crate::crypto_backend_name().to_string(),
+                dtls13: crate::dtls13_supported(),
+                default_netem: options.default_netem.clone(),
+            }],
+            ServerAction::None,
+        ),
 
         ClientMessage::Sdp { session_id, sdp } => {
             info!(%session_id, "Received SDP from client ({} bytes)", sdp.len());

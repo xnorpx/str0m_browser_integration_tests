@@ -4,3 +4,6 @@ Cargo.lock
 web/node_modules/
 web/dist/
 __pycache__/
+# `go build` output inside pion/ (CI and docs build to target/release/pion-interop)
+/pion/pion
+/pion/pion.exe

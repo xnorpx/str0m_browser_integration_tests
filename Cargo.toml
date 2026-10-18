@@ -24,10 +24,28 @@ mimalloc = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 str0m = { git = "https://github.com/algesten/str0m", default-features = false }
+# Same git source as str0m, so both resolve to the same commit.
+str0m-netem = { git = "https://github.com/algesten/str0m" }
 tokio = { version = "1", features = ["full"] }
 tokio-tungstenite = "0.26"
 tracing = "0.1"
-tracing-subscriber = "0.3"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Temporary: use dimpl (str0m's DTLS implementation) from its main branch for two
+# fixes that aren't released yet:
+# - algesten/dimpl#162: dimpl 0.7.6 never disarms the DTLS 1.3 client's 40s handshake
+#   deadline, so str0m as DTLS 1.3 client drops every connection 40s after the
+#   handshake started.
+# - algesten/dimpl#184 (fixes #183): dimpl 0.7.6's auto-sense client changes its
+#   ClientHello after a HelloVerifyRequest/HelloRetryRequest, so str0m Auto as DTLS
+#   client can't connect to Pion.
+# str0m main doesn't build against dimpl main yet (dimpl#175 changed
+# send_application_data), so str0m comes from xnorpx/str0m@dimpl-main-compat:
+# str0m main + that adaptation, depending on dimpl git main. Remove this section
+# once upstream str0m depends on a dimpl release containing these changes.
+[patch."https://github.com/algesten/str0m"]
+str0m = { git = "https://github.com/xnorpx/str0m", branch = "dimpl-main-compat" }
+str0m-netem = { git = "https://github.com/xnorpx/str0m", branch = "dimpl-main-compat" }
 
 [lints.rust]
 redundant_imports = "deny"

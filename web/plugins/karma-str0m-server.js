@@ -13,6 +13,9 @@
  *   PREBUILT_SERVER_BINARY  - Path to a pre-built server binary (skips cargo build).
  *   CARGO                   - Path to the cargo binary (default: "cargo").
  *   RUST_LOG                - Passed through to the server (default: "info,str0m=warn,sctp_proto=warn").
+ *   STR0M_NETEM             - str0m-netem spec for both directions, e.g. "loss=5" (server --netem).
+ *   STR0M_NETEM_EGRESS      - Only packets the server sends (server --netem-egress).
+ *   STR0M_NETEM_INGRESS     - Only packets the server receives (server --netem-ingress).
  */
 'use strict';
 
@@ -105,6 +108,15 @@ function startServer(binary, wsPort, projectRoot, config = {}) {
       '--udp-port-start', '0',
       '--adv-addr', advAddr,
     ];
+    for (const [env, flag] of [
+      ['STR0M_NETEM', '--netem'],
+      ['STR0M_NETEM_EGRESS', '--netem-egress'],
+      ['STR0M_NETEM_INGRESS', '--netem-ingress'],
+    ]) {
+      if (process.env[env]) {
+        args.push(flag, process.env[env]);
+      }
+    }
 
     console.log(`[str0m-server] Spawning: ${binary} ${args.join(' ')}`);
 

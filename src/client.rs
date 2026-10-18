@@ -18,7 +18,7 @@ pub async fn create_session(
 ) -> Result<ServerMessage, Box<dyn std::error::Error>> {
     let msg = ClientMessage::Create {
         session_id: session_id.to_string(),
-        config,
+        config: Box::new(config),
     };
     send_msg(ws_stream, &msg).await?;
     recv_msg(ws_stream).await

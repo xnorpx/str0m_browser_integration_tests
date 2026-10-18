@@ -10,7 +10,8 @@
     "test:firefox": "npm run test:firefox --prefix web",
     "test:safari": "npm run test:safari --prefix web",
     "test:snap:chrome": "npm run test:snap:chrome --prefix web",
-    "test:snap:edge": "npm run test:snap:edge --prefix web"
+    "test:snap:edge": "npm run test:snap:edge --prefix web",
+    "test:pion": "go -C pion run ."
   },
   "devDependencies": {
     "karma-webdriver-launcher": "^1.0.8"

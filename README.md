@@ -1,6 +1,6 @@
 # str0m Browser Integration Tests
 
-End-to-end WebRTC integration tests for [str0m](https://github.com/algesten/str0m), exercising **ICE**, **DTLS**, **SCTP**, and **DataChannel** negotiation between a Rust server and real browsers (Chrome, Edge, Firefox, Safari). All sessions are packet-captured and analyzed to count **round-trip times (RTTs)** — making this the primary observatory for measuring the connection-setup improvements delivered by **DTLS 1.3** and **SNAP**.
+End-to-end WebRTC integration tests for [str0m](https://github.com/algesten/str0m), exercising **ICE**, **DTLS**, **SCTP**, and **DataChannel** negotiation between a Rust server and real browsers (Chrome, Edge, Firefox, Safari) and [Pion](https://github.com/pion/webrtc) (Go). All sessions are packet-captured and analyzed to count **round-trip times (RTTs)** — making this the primary observatory for measuring the connection-setup improvements delivered by **DTLS 1.3** and **SNAP**. The str0m side can emulate lossy and slow networks with [str0m-netem](#network-emulation-str0m-netem).
 
 ## The Problem: 6 RTTs to Open a Data Channel
 
@@ -29,25 +29,31 @@ WebRTC connection setup can be optimized using orthogonal, backwards-compatible 
 
 This repo captures pcaps from every test permutation so we can **observe and quantify** these improvements as str0m and browsers add support.
 
-> **Note:** DTLS 1.3 is enabled by default in Chrome/Edge since Oct 2025. str0m supports DTLS 1.3 via the `aws-lc-rs` and `rust-crypto` backends (using `DtlsVersion::Auto`). SNAP is verified both in browser tests and native Rust-to-Rust tests. Safari is tested natively on macOS via `safaridriver`, though explicit DTLS 1.3 and SNAP tests are currently skipped as Safari does not yet fully support these natively.
+> **Note:** DTLS 1.3 is enabled by default in Chrome/Edge since Oct 2025. The server's `server_dtls_version: "auto"` (the default) maps to str0m's `DtlsVersion::Auto`, so browsers negotiate DTLS 1.3 on every backend that supports it (all dimpl based ones: `aws-lc-rs`, `rust-crypto`, `apple-crypto`, `openssl-dimpl`, `wincrypto-dimpl`); the plain `openssl` backend is DTLS 1.2 only and `auto` falls back to 1.2 there. SNAP is verified in browser, Pion and native Rust-to-Rust tests. Safari is tested natively on macOS via `safaridriver`, though explicit DTLS 1.3 and SNAP tests are currently skipped as Safari does not yet fully support these natively.
+
+> **Temporary dependency override:** `Cargo.toml` patches str0m to [`xnorpx/str0m@dimpl-main-compat`](https://github.com/xnorpx/str0m/tree/dimpl-main-compat) (str0m main plus a small adaptation) so that it builds against [dimpl](https://github.com/algesten/dimpl) `main`, which has two fixes that aren't released yet. dimpl 0.7.6 never disarms the DTLS 1.3 client's 40 s handshake deadline, so str0m as DTLS 1.3 client drops every connection 40 s after the handshake started ([algesten/dimpl#162](https://github.com/algesten/dimpl/pull/162)). Its auto-sense client also changes its ClientHello after a HelloVerifyRequest/HelloRetryRequest, so str0m `auto` as DTLS client can't connect to Pion ([algesten/dimpl#183](https://github.com/algesten/dimpl/issues/183), fixed by [algesten/dimpl#184](https://github.com/algesten/dimpl/pull/184)). dimpl main also changed `send_application_data` ([algesten/dimpl#175](https://github.com/algesten/dimpl/pull/175)), which upstream str0m doesn't build against yet. Remove the `[patch]` section once upstream str0m depends on a dimpl release with these changes.
 
 ## Architecture Overview
 
 ```mermaid
 graph TB
     subgraph CI["GitHub Actions CI"]
-        Lint["Lint (fmt + clippy)"]
-        Build["Build Server<br/>(3 OS × 3 crypto backends)"]
-        Test["Browser Tests<br/>(3 OS × 3 crypto × 7 test suites)"]
-        Analyze["RTT Analysis<br/>(Python pcap analyzer)"]
+        Lint["Lint (fmt + clippy + gofmt/vet)"]
+        Build["Build Server<br/>(3 OS × crypto backends)"]
+        Test["Browser Tests<br/>(OS × crypto × browser suites)"]
+        Pion["Pion Interop<br/>(OS × crypto × 168 cases)"]
+        Analyze["RTT Analysis + Pion matrix<br/>(Python)"]
         Lint --> Build --> Test --> Analyze
+        Build --> Pion --> Analyze
     end
 
     subgraph Server["Rust Server (str0m)"]
         WS["WebSocket Signaling<br/>(tokio-tungstenite)"]
         Peer["Peer Event Loop<br/>(str0m Rtc engine)"]
+        Netem["str0m-netem<br/>(egress + ingress)"]
         Pcap["Pcap Capture<br/>(pcapng writer)"]
         WS -->|spawn| Peer
+        Peer --> Netem
         Peer --> Pcap
     end
 
@@ -58,8 +64,16 @@ graph TB
         Karma --> WRTC --> DC
     end
 
+    subgraph PionRunner["Pion runner (Go)"]
+        Matrix["pion-interop<br/>(case matrix)"]
+        PionPC["pion/webrtc v5<br/>(pion/dtls v4)"]
+        Matrix --> PionPC
+    end
+
     Browser <-->|"WebSocket (signaling)"| WS
-    WRTC <-->|"UDP (ICE/DTLS/SCTP)"| Peer
+    WRTC <-->|"UDP (ICE/DTLS/SCTP)"| Netem
+    PionRunner <-->|"WebSocket (signaling)"| WS
+    PionPC <-->|"UDP (ICE/DTLS/SCTP)"| Netem
 ```
 
 ## Component Model
@@ -71,35 +85,47 @@ graph LR
         server["server.rs<br/>WS signaling handler"]
         client["client.rs<br/>WS client helpers"]
         peer["peer.rs<br/>Peer event loop"]
+        netem["netem.rs<br/>str0m-netem paths + specs"]
         protocol["protocol.rs<br/>JSON message types"]
         pcap["pcap.rs<br/>pcapng writer"]
         net["net.rs<br/>IP detection"]
-        lib["lib.rs<br/>Session, UdpPortAllocator,<br/>shared DtlsCert"]
+        lib["lib.rs<br/>Session, UdpPortAllocator,<br/>shared DtlsCert, DTLS 1.3 probe"]
     end
 
     subgraph "TypeScript (web/src)"
         spec_base["webrtc-client.spec.ts<br/>Base browser tests"]
-        spec_warp["webrtc-warp.spec.ts<br/>SNAP/DTLS 1.3 tests"]
+        spec_snap["webrtc-snap.spec.ts<br/>SNAP tests"]
         ts_proto["protocol.ts<br/>Message types"]
         ts_signal["signaling.ts<br/>WS client"]
     end
 
+    subgraph "Go (pion/)"
+        pion_main["main.go<br/>CLI, server spawn"]
+        pion_matrix["matrix.go<br/>cases + expectations"]
+        pion_session["session.go<br/>Pion peer per case"]
+        pion_report["report.go<br/>JSON + markdown"]
+    end
+
     subgraph "Infra"
         karma_base["karma.conf.js<br/>Base config"]
-        karma_warp["karma.warp.conf.js<br/>Optimized config"]
+        karma_snap["karma.snap.conf.js<br/>SNAP config"]
         plugin["plugins/<br/>karma-str0m-server"]
         analyze["scripts/analyze_pcaps.py"]
+        pion_matrix_report["scripts/pion_matrix_report.py"]
     end
 
     bin_server --> server
     server --> peer
     server --> protocol
+    peer --> netem
     peer --> pcap
     peer --> lib
     spec_base --> ts_signal --> ts_proto
-    spec_warp --> ts_signal
+    spec_snap --> ts_signal
     karma_base --> plugin
-    karma_warp --> plugin
+    karma_snap --> plugin
+    pion_main --> pion_matrix --> pion_session
+    pion_main --> pion_report
 ```
 
 ## This Repo's Signaling & Test Flow
@@ -314,6 +340,63 @@ Each feature test runs `offerer` and `answerer` variants against ICE-Lite.
 
 > **ICE Lite is RECOMMENDED for optimized servers** (for minimal RTTs): a Lite server can respond immediately without waiting for its own connectivity check, enabling minimal RTTs.
 
+### Pion Interop Matrix
+
+[`pion/`](pion/) is a Go runner built on [pion/webrtc](https://github.com/pion/webrtc) **v5** (its `next` branch), which uses [pion/dtls](https://github.com/pion/dtls) **v4** with DTLS 1.3, and Pion's SNAP support (`SettingEngine.EnableSctpSnap`). It plays the browser's part against the same str0m server: it speaks the WebSocket signaling protocol, opens a data channel, checks the echo and then verifies what was negotiated on **both** sides. Pion reports its DTLS version from its transport stats, str0m returns its own in the `destroyed` report, and SNAP is checked via `a=sctp-init` in both SDPs.
+
+| Suite | Cases | What varies |
+|-------|:-----:|-------------|
+| `dtls` | 36 | str0m `server_dtls_version` {1.2, auto, 1.3} × Pion min/max {1.2, auto, 1.3} × Pion offerer/answerer × Pion DTLS client/server (= str0m DTLS server/client). Pairs without a common version must be **rejected** (🚫). |
+| `snap` | 20 | SNAP on both sides for every DTLS version, plus fallback when only str0m or only Pion advertises `a=sctp-init` |
+| `ice` | 12 | str0m ICE full instead of lite |
+| `netem` | 96 | str0m-netem profiles `loss5`, `loss15`, `burst`, `delay` × DTLS versions × SNAP on/off × both role pairs |
+| `longlived` | 4 | Idle 45 s before a second echo (past the 40 s DTLS handshake deadline), str0m as DTLS client and server |
+
+Expected outcomes are computed per case, for example `auto` vs `1.2` must negotiate 1.2, `auto` vs `auto` 1.3. When the server's crypto backend has no DTLS 1.3 (plain `openssl`), `auto` means 1.2 there and the str0m 1.3 cases are skipped. Failures that match a **known upstream issue** are reported as ⚠️ (`xfail`) and don't fail the run:
+
+| Known issue | Effect |
+|-------------|--------|
+| `str0m-openssl-no-dtls-retransmit` | str0m's plain `openssl` backend never retransmits DTLS handshake flights (its `handle_timeout` doesn't drive OpenSSL's DTLS timer), so with netem loss a single lost handshake packet stalls the connection. The dimpl backends recover. |
+
+> **Reading the timings:** DTLS 1.3 only lets the DTLS *client* finish earlier (1 RTT instead of 2). The server finishes at 1.5 RTT with either version, so the gain only shows when the side that sends first after the handshake is the DTLS client (with SNAP that's whoever created the data channel). str0m (dimpl) as 1.3 client sends right after its Finished, as RFC 8446 §4.4.4 allows. Pion as 1.3 client doesn't: pion/dtls v4 only completes the client handshake (and holds back application writes) until the server ACKs the client's Finished, and pion/webrtc only starts SCTP after that, so Pion as DTLS client is ready at 2 RTT just like with DTLS 1.2. Neither pion/dtls nor pion/webrtc has an option for this (checked `v4.0.0-rc.3` and `main` as of 2026-10-18). Patching pion/dtls locally to send right after Finished, while still retransmitting Finished until it's ACKed, saved one RTT (~150 ms on the `delay` profile) and still passed every loss case.
+
+```bash
+cargo build --release --bin server
+go -C pion run . -server-bin ../target/release/server       # all suites
+go -C pion run . -server-bin ../target/release/server -suites dtls,snap -run 'offerer_passive'
+go -C pion run . -list                                        # print case names
+```
+
+Without `-server-bin` the runner uses `$PREBUILT_SERVER_BINARY` or builds the server with cargo (`npm run test:pion` does exactly that). Results go to `target/pion-interop/`: `results.json`, `summary.md` (tables like the ones in the CI step summary), `server.log` and per-case Pion logs for failures (`-keep-logs` keeps them all). Pcaps are written to `target/pcap/` as `pion_<suite>_<pion sdp>_<pion dtls role>_<ice>_s<str0m dtls>_p<pion dtls>_snap<mode>[_<netem>]_server.pcapng`. Useful flags: `-parallel`, `-netem-profiles`, `-hold`, `-pion-log`, `-server-args "--netem loss=2"` and `-summary-md`. To try a newer Pion, run `go get github.com/pion/webrtc/v5@next` in `pion/`.
+
+## Network emulation (str0m-netem)
+
+The str0m peer can run [str0m-netem](https://github.com/algesten/str0m/tree/main/crates/netem) (sans-IO loss, latency, jitter, duplication, reordering and rate limiting) on both its **egress** (str0m → remote) and **ingress** (remote → str0m) path, independently. Netem is seeded from the session id unless a seed is given, so a test case sees the same loss pattern on every run. Pcaps show str0m's view of the network: egress packets before netem drops or delays them, ingress packets after netem. The `destroyed` message carries a report with per-direction netem counters (`packets`, `dropped`, `duplicated`) plus the negotiated DTLS version and setup timings.
+
+Per session, in the `create` message:
+
+```json
+{"type": "create", "session_id": "lossy", "config": {
+  "client_sdp_role": "offerer", "server_ice_mode": "lite", "client_dtls_role": "active",
+  "server_netem": {
+    "egress":  {"loss_percent": 5, "latency_ms": 40, "jitter_ms": 5},
+    "ingress": {"preset": "cellular", "seed": 7}
+  }
+}}
+```
+
+Link fields: `preset` (`wifi`, `wifi_lossy`, `wifi_congested`, `cellular`, `satellite`, `congested`), `loss_percent`, `loss_correlation`, `burst_interval`/`burst_length` (Gilbert-Elliot bursts, in packets), `latency_ms`, `jitter_ms`, `duplicate_percent`, `reorder_gap`, `rate_kbps`/`buffer_bytes`, `seed`.
+
+As a server default for every session that doesn't send its own (handy for browser runs):
+
+```bash
+target/release/server --netem loss=5                       # both directions
+target/release/server --netem-egress cellular --netem-ingress "burst=20:3,latency=40ms"
+STR0M_NETEM="loss=5" npm run test:chrome                   # karma passes STR0M_NETEM[_EGRESS|_INGRESS]
+```
+
+Spec keys: a preset name, `loss` (%), `corr`, `burst=<interval>:<length>`, `latency`/`jitter` (ms), `dup` (%), `reorder`, `rate` (kbps), `buffer` (bytes), `seed`.
+
 ### CI Matrix
 
 ```mermaid
@@ -327,9 +410,9 @@ graph LR
     subgraph Crypto["Crypto Backends"]
         aws["aws-lc-rs"]
         rust["rust-crypto"]
-        ossl["openssl (Linux)"]
+        ossl["openssl / openssl-dimpl (Linux)"]
         apple["apple-crypto (macOS)"]
-        win["wincrypto (Windows)"]
+        win["wincrypto-dimpl (Windows)"]
     end
 
     subgraph Browsers["Browsers"]
@@ -344,26 +427,40 @@ graph LR
         DTLS13["DTLS 1.3 (Chrome)"]
     end
 
+    subgraph PionInterop["Pion interop"]
+        PionMatrix["dtls · snap · ice · netem · longlived"]
+    end
+
     OS --- Crypto
     Crypto --- Browsers
     Crypto --- Features
+    Crypto --- PionInterop
 ```
 
-The full CI runs **~63 test jobs** (after exclusions for platform-specific crypto backends and browser compatibility).
+The full CI runs **~63 browser test jobs** (after exclusions for platform-specific crypto backends and browser compatibility) plus **10 Pion interop jobs** (one per OS × crypto backend, 168 cases each).
 
 ## Project Structure
 
 ```
 ├── .github/workflows/
-│   └── browser-tests.yml          # CI: lint → build → test → analyze
+│   └── browser-tests.yml          # CI: lint → build → browser tests + Pion interop → analyze
+├── pion/                          # Pion (Go) interop runner, see "Pion Interop Matrix"
+│   ├── main.go                    # CLI, spawns the server, runs cases in parallel
+│   ├── matrix.go                  # Suites, cases, expected outcomes
+│   ├── session.go                 # One Pion peer per case + known upstream issues
+│   ├── report.go                  # results.json + markdown report
+│   ├── server.go / protocol.go    # Server process + signaling types
+│   └── go.mod                     # pion/webrtc v5 (next), pion/dtls v4
 ├── scripts/
-│   └── analyze_pcaps.py           # Post-test RTT analysis & charts
+│   ├── analyze_pcaps.py           # Post-test RTT analysis & charts
+│   └── pion_matrix_report.py      # Merges Pion results of all CI jobs
 ├── src/
 │   ├── bin/server.rs              # CLI entry point (clap)
-│   ├── lib.rs                     # Session state, DtlsCert cache, port allocator
+│   ├── lib.rs                     # Session state, DtlsCert cache, port allocator, DTLS 1.3 probe
 │   ├── server.rs                  # WebSocket signaling handler
 │   ├── client.rs                  # WS client helpers (used by Rust tests)
-│   ├── peer.rs                    # str0m Rtc event loop + pcap capture
+│   ├── peer.rs                    # str0m Rtc event loop + netem + pcap capture
+│   ├── netem.rs                   # str0m-netem integration and spec parsing
 │   ├── protocol.rs                # JSON signaling message types
 │   ├── pcap.rs                    # pcapng file writer
 │   └── net.rs                     # Network interface / IP detection
@@ -371,16 +468,17 @@ The full CI runs **~63 test jobs** (after exclusions for platform-specific crypt
 │   └── integration.rs             # Native Rust-to-Rust integration tests
 ├── web/
 │   ├── karma.conf.js              # Karma config (base browser tests)
-    └── karma.warp.conf.js         # Karma config (SNAP/DTLS 1.3 tests)
+│   ├── karma.snap.conf.js         # Karma config (SNAP tests)
 │   ├── plugins/                   # karma-str0m-server, karma-edge-launcher
 │   └── src/
 │       ├── protocol.ts            # TS mirror of protocol.rs
 │       ├── signaling.ts           # WS client for browsers
-│       ├── webrtc-client.spec.ts  # Base test suite (6 test cases)
-│       └── webrtc-warp.spec.ts    # Feature test suite (6 test cases)
+│       ├── webrtc-client.spec.ts  # Base test suite (10 test cases)
+│       └── webrtc-snap.spec.ts    # SNAP test suite (2 test cases)
 ├── target/pcap/                   # Captured pcapng files (gitignored)
-├── Cargo.toml                     # Rust deps (str0m from git)
-└── package.json                   # Root npm scripts (delegates to web/)
+├── target/pion-interop/           # Pion runner results and logs (gitignored)
+├── Cargo.toml                     # Rust deps (str0m + str0m-netem from git)
+└── package.json                   # Root npm scripts (delegates to web/, test:pion)
 ```
 
 ## CI Pipeline
@@ -388,27 +486,33 @@ The full CI runs **~63 test jobs** (after exclusions for platform-specific crypt
 ```mermaid
 flowchart TD
     trigger["PR / Daily Schedule / Manual"] --> lint
-    lint["Lint<br/>cargo fmt + clippy"] --> build
+    lint["Lint<br/>cargo fmt + clippy, gofmt + go vet"] --> build
 
-    build["Build Server<br/>3 OS × 3 crypto"]
+    build["Build Server<br/>3 OS × crypto"]
     build --> |artifact: server binary| test
+    build --> |artifact: server binary| pion
 
     test["Browser Tests<br/>63 jobs"]
     test --> |artifact: pcapng files| analyze
 
-    analyze["RTT Analysis<br/>Python + matplotlib"]
+    pion["Pion Interop<br/>10 jobs × 168 cases"]
+    pion --> |artifacts: pcapng, results.json, logs| analyze
+
+    analyze["RTT Analysis + Pion matrix<br/>Python"]
     analyze --> |artifact: charts + markdown| report["📊 GitHub Step Summary"]
 
     build --> |pcapng| analyze
 ```
 
-Each test job:
+Each browser test job:
 1. Downloads the pre-built server binary
 2. Installs npm dependencies in `web/`
 3. Karma launches the server via the `karma-str0m-server` plugin
 4. Spawns the headless browser
 5. Runs the Jasmine test suites
 6. Uploads pcapng captures as artifacts
+
+Each Pion job downloads the same server binary, builds `pion/` with Go, runs all suites (`-parallel 4`), writes its report to the step summary and uploads pcaps (`pcaps-<os>-<crypto>-test-pion`) and results (`pion-results-<os>-<crypto>`). The analyze job merges all `results.json` files into one case × platform matrix (`pion-matrix.md` in the `rtt-analysis` artifact) and lists every case that failed on any platform in the step summary.
 
 ## Running Locally
 
@@ -417,6 +521,7 @@ Each test job:
 - **Rust** (stable, edition 2024)
 - **Node.js** 20+
 - **Chrome**, **Edge**, or **Firefox** installed
+- **Go** 1.24+ for the Pion interop runner
 
 ### Build & Run
 
@@ -431,13 +536,20 @@ cargo test --release
 cd web && npm ci
 npm run test:chrome
 
-# Run DTLS1.3/SNAP feature tests
-npm run test:warp:chrome
+# Run SNAP feature tests
+npm run test:snap:chrome
+
+# Run the Pion interop matrix (from the repo root)
+go -C pion run . -server-bin ../target/release/server
 
 # Analyze captured pcaps
 pip install matplotlib numpy
 python scripts/analyze_pcaps.py target/pcap/ --output-dir analysis
 ```
+
+`RUST_LOG` controls the server's and tests' logging (default `info`), e.g. `RUST_LOG=info,str0m=debug,dimpl=trace`.
+
+> On macOS, the application firewall can silently drop inbound UDP to a freshly built `target/release/server` on the LAN address the browser tests use (loopback is unaffected, so Pion and native tests still pass). Allow the binary in *System Settings → Network → Firewall* or let Karma build and use `target/debug/server`.
 
 ### Crypto Backend Selection
 
@@ -461,6 +573,8 @@ Every test captures a pcapng file at `target/pcap/{session_id}_{role}.pcapng`. T
 3. Counts RTTs per phase (STUN, DTLS handshake, SCTP handshake)
 4. Generates a markdown summary table and PNG bar charts
 5. Outputs to `$GITHUB_STEP_SUMMARY` for in-PR visibility
+
+Pion sessions show up with browser `pion`; their `Client DTLS cfg` column is Pion's DTLS version setting and `Netem` is the str0m-netem profile (both `-` for browser and native sessions). Under netem loss the RTT counts include retransmitted flights.
 
 ### Reading the RTT Table
 
