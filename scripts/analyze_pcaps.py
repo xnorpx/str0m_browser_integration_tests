@@ -103,9 +103,11 @@ class SessionAnalysis:
     client_sdp: str = ""
     client_dtls: str = ""
     server_dtls: str = ""
+    client_dtls_cfg: str = "-"
     dtls_negotiated: str = "-"
     server_ice: str = ""
     snap_mode: str = ""
+    netem: str = "-"
     total_packets: int = 0
     stun_rtts: int = 0
     dtls_rtts: int = 0
@@ -224,9 +226,35 @@ def analyze_session(packets: list[Packet], session_id: str) -> SessionAnalysis:
 
     return res
 
+PION_VERSIONS = {"12": "1.2", "auto": "auto", "13": "1.3"}
+
+def parse_pion_session_id(parts: list[str], platform: str, crypto: str) -> dict | None:
+    # pion_<suite>_<sdp>_<dtls role>_<ice>_s<ver>_p<ver>_snap<mode>[_<netem profile>]
+    if len(parts) < 7 or not (parts[4].startswith("s") and parts[5].startswith("p") and parts[6].startswith("snap")):
+        return None
+    snap = parts[6][len("snap"):]
+    return {
+        "browser": "pion",
+        "client_sdp": parts[1],
+        "client_dtls": parts[2],
+        "server_ice": parts[3],
+        "server_dtls": PION_VERSIONS.get(parts[4][1:], parts[4][1:]),
+        "client_dtls_cfg": PION_VERSIONS.get(parts[5][1:], parts[5][1:]),
+        # Whether the client (Pion) advertises SNAP.
+        "snap_mode": "True" if snap in ("on", "pion") else "False",
+        "netem": parts[7] if len(parts) > 7 else "-",
+        "platform": platform,
+        "crypto": crypto,
+    }
+
 def parse_session_id(session_id: str, platform: str, crypto: str, is_native: bool = False) -> dict:
     parts = session_id.split("_")
-    
+
+    if parts and parts[0] == "pion":
+        meta = parse_pion_session_id(parts[1:], platform, crypto)
+        if meta:
+            return meta
+
     known_browsers = {"chrome", "firefox", "edge", "safari"}
     
     browser = "native"
@@ -328,16 +356,17 @@ def collect_pcap_files(pcap_dir: Path) -> list:
 def generate_markdown_table(results: list[SessionAnalysis]) -> str:
     lines = []
     lines.append("## Connection Analysis\n")
-    lines.append("| Platform | Crypto | Browser | Browser Role | Client DTLS | Server DTLS cfg | DTLS Negotiated | Server ICE | Client SNAP | Time to Connected | Protocol RTTs | ICE | DTLS | SCTP |")
-    lines.append("|----------|--------|---------|--------------|-------------|-----------------|-----------------|------------|-------------|-------------------|---------------|-----|------|------|")
+    lines.append("| Platform | Crypto | Browser | Browser Role | Client DTLS | Server DTLS cfg | Client DTLS cfg | DTLS Negotiated | Server ICE | Client SNAP | Netem | Time to Connected | Protocol RTTs | ICE | DTLS | SCTP |")
+    lines.append("|----------|--------|---------|--------------|-------------|-----------------|-----------------|-----------------|------------|-------------|-------|-------------------|---------------|-----|------|------|")
 
-    results.sort(key=lambda r: (r.platform, r.crypto, r.browser, r.client_sdp, r.server_dtls, r.server_ice))
+    results.sort(key=lambda r: (r.platform, r.crypto, r.browser, r.client_sdp, r.server_dtls, r.client_dtls_cfg, r.server_ice, r.netem))
 
     for r in results:
+        prefix = f"| {r.platform} | {r.crypto} | {r.browser} | {r.client_sdp} | {r.client_dtls} | {r.server_dtls} | {r.client_dtls_cfg} | {r.dtls_negotiated} | {r.server_ice} | {r.snap_mode} | {r.netem} |"
         if r.error:
-            lines.append(f"| {r.platform} | {r.crypto} | {r.browser} | {r.client_sdp} | {r.client_dtls} | {r.server_dtls} | {r.dtls_negotiated} | {r.server_ice} | {r.snap_mode} | Error | - | - | - | - |")
+            lines.append(f"{prefix} Error | - | - | - | - |")
         else:
-            lines.append(f"| {r.platform} | {r.crypto} | {r.browser} | {r.client_sdp} | {r.client_dtls} | {r.server_dtls} | {r.dtls_negotiated} | {r.server_ice} | {r.snap_mode} | {r.time_to_connected_ms:.1f} ms | **{r.total_rtts}** | {r.stun_rtts} | {r.dtls_rtts} | {r.sctp_rtts} |")
+            lines.append(f"{prefix} {r.time_to_connected_ms:.1f} ms | **{r.total_rtts}** | {r.stun_rtts} | {r.dtls_rtts} | {r.sctp_rtts} |")
 
     return "\n".join(lines)
 
@@ -369,6 +398,8 @@ def main():
         analysis.server_dtls = meta["server_dtls"]
         analysis.server_ice = meta["server_ice"]
         analysis.snap_mode = meta["snap_mode"]
+        analysis.client_dtls_cfg = meta.get("client_dtls_cfg", "-")
+        analysis.netem = meta.get("netem", "-")
         results.append(analysis)
 
     md = generate_markdown_table(results)

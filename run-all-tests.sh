@@ -111,6 +111,17 @@ else
   echo -e "${CYAN}[SKIP] Skipping SNAP Edge (not found)${NC}"; ((SKIPPED+=1))
 fi
 
+# -- Pion interop (Go) ------------------------------------------------
+echo -e "\n${BOLD}===============================================${NC}"
+echo -e "${BOLD}  Pion interop (pion/webrtc v5)${NC}"
+echo -e "${BOLD}===============================================${NC}"
+
+if command -v go &>/dev/null; then
+  run "Pion interop" go -C pion run . -server-bin "$PREBUILT_SERVER_BINARY"
+else
+  echo -e "${CYAN}[SKIP] Skipping Pion interop (go not found)${NC}"; ((SKIPPED+=1))
+fi
+
 # -- Summary ----------------------------------------------------------
 echo -e "\n${BOLD}===============================================${NC}"
 echo -e "${BOLD}  Summary${NC}"

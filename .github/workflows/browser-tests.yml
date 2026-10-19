@@ -2,10 +2,10 @@ name: Browser Integration Tests
 
 on:
   pull_request:
-  schedule:
-    # Run daily at 06:00 UTC
-    - cron: '0 6 * * *'
   workflow_dispatch:
+  # The daily run comes from nightly.yml. GitHub disables a scheduled workflow after
+  # 60 days without repository activity, so a schedule here would also stop PR runs.
+  workflow_call:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -36,6 +36,22 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --all -- -D warnings
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          cache-dependency-path: pion/go.sum
+
+      - name: Go formatting and vet (Pion interop runner)
+        working-directory: pion
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "gofmt needed for: $unformatted"
+            exit 1
+          fi
+          go vet ./...
 
   # Build the Rust server binary per OS x crypto provider
   build-server:
@@ -267,10 +283,144 @@ jobs:
           if-no-files-found: ignore
       # ----------------------------
 
+  # Pion (pion/webrtc v5, DTLS 1.3 via pion/dtls v4) <-> str0m interop matrix per OS x crypto:
+  # DTLS 1.2/auto/1.3 on both sides with str0m as DTLS client and server, SNAP, ICE full,
+  # str0m-netem loss/delay and long-lived sessions. See pion/ and README.
+  pion:
+    name: "Pion · ${{ matrix.crypto }} · ${{ matrix.os-label }}"
+    needs: build-server
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,  os-label: Linux,   os-slug: linux,   crypto: aws-lc-rs,       bin: server }
+          - { os: ubuntu-latest,  os-label: Linux,   os-slug: linux,   crypto: rust-crypto,     bin: server }
+          - { os: ubuntu-latest,  os-label: Linux,   os-slug: linux,   crypto: openssl,         bin: server }
+          - { os: ubuntu-latest,  os-label: Linux,   os-slug: linux,   crypto: openssl-dimpl,   bin: server }
+          - { os: macos-latest,   os-label: macOS,   os-slug: macos,   crypto: aws-lc-rs,       bin: server }
+          - { os: macos-latest,   os-label: macOS,   os-slug: macos,   crypto: rust-crypto,     bin: server }
+          - { os: macos-latest,   os-label: macOS,   os-slug: macos,   crypto: apple-crypto,    bin: server }
+          - { os: windows-latest, os-label: Windows, os-slug: windows, crypto: aws-lc-rs,       bin: server.exe }
+          - { os: windows-latest, os-label: Windows, os-slug: windows, crypto: rust-crypto,     bin: server.exe }
+          - { os: windows-latest, os-label: Windows, os-slug: windows, crypto: wincrypto-dimpl, bin: server.exe }
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          cache-dependency-path: pion/go.sum
+
+      # --- Download server binary ---
+      - name: Download server binary (Try 1)
+        id: dl1
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: server-${{ matrix.os-slug }}-${{ matrix.crypto }}
+          path: target/release
+      - name: Download server binary (Try 2)
+        id: dl2
+        if: steps.dl1.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: server-${{ matrix.os-slug }}-${{ matrix.crypto }}
+          path: target/release
+      - name: Download server binary (Try 3)
+        if: steps.dl2.outcome == 'failure'
+        uses: actions/download-artifact@v8
+        with:
+          name: server-${{ matrix.os-slug }}-${{ matrix.crypto }}
+          path: target/release
+      # ------------------------------
+
+      - name: Make server executable
+        if: runner.os != 'Windows'
+        run: chmod +x target/release/${{ matrix.bin }}
+
+      - name: Build Pion interop runner
+        working-directory: pion
+        run: go build -o ../target/release/pion-interop${{ runner.os == 'Windows' && '.exe' || '' }} .
+
+      - name: Run Pion interop matrix
+        shell: bash
+        run: |
+          ./target/release/pion-interop \
+            -server-bin "target/release/${{ matrix.bin }}" \
+            -os "${{ matrix.os-label }}" \
+            -crypto "${{ matrix.crypto }}" \
+            -parallel 4 \
+            -summary-md "$GITHUB_STEP_SUMMARY"
+
+      # --- Upload pcap captures ---
+      - name: Upload pcap captures (Try 1)
+        id: uppcap1
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: pcaps-${{ matrix.os-slug }}-${{ matrix.crypto }}-test-pion
+          path: target/pcap/
+          retention-days: 5
+          if-no-files-found: ignore
+      - name: Upload pcap captures (Try 2)
+        id: uppcap2
+        if: always() && steps.uppcap1.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: pcaps-${{ matrix.os-slug }}-${{ matrix.crypto }}-test-pion
+          path: target/pcap/
+          retention-days: 5
+          if-no-files-found: ignore
+      - name: Upload pcap captures (Try 3)
+        if: always() && steps.uppcap2.outcome == 'failure'
+        uses: actions/upload-artifact@v7
+        with:
+          name: pcaps-${{ matrix.os-slug }}-${{ matrix.crypto }}-test-pion
+          path: target/pcap/
+          retention-days: 5
+          if-no-files-found: ignore
+      # ----------------------------
+
+      # --- Upload results, per-case logs of failures and the server log ---
+      - name: Upload Pion results (Try 1)
+        id: upres1
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: pion-results-${{ matrix.os-slug }}-${{ matrix.crypto }}
+          path: target/pion-interop/
+          retention-days: 14
+          if-no-files-found: ignore
+      - name: Upload Pion results (Try 2)
+        id: upres2
+        if: always() && steps.upres1.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: pion-results-${{ matrix.os-slug }}-${{ matrix.crypto }}
+          path: target/pion-interop/
+          retention-days: 14
+          if-no-files-found: ignore
+      - name: Upload Pion results (Try 3)
+        if: always() && steps.upres2.outcome == 'failure'
+        uses: actions/upload-artifact@v7
+        with:
+          name: pion-results-${{ matrix.os-slug }}-${{ matrix.crypto }}
+          path: target/pion-interop/
+          retention-days: 14
+          if-no-files-found: ignore
+      # ------------------------------------------------------------------
+
   # Analyze pcap captures and generate RTT report
   analyze:
     name: "RTT Analysis"
-    needs: [build-server, test]
+    needs: [build-server, test, pion]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -317,6 +467,40 @@ jobs:
       - name: Run analysis
         run: |
           python scripts/analyze_pcaps.py all-pcaps \
+            --output-dir analysis \
+            --summary-file "$GITHUB_STEP_SUMMARY"
+
+      # --- Download Pion interop results ---
+      - name: Download Pion results (Try 1)
+        id: dl_pion1
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          path: all-pion
+          pattern: pion-results-*
+          merge-multiple: false
+      - name: Download Pion results (Try 2)
+        id: dl_pion2
+        if: steps.dl_pion1.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          path: all-pion
+          pattern: pion-results-*
+          merge-multiple: false
+      - name: Download Pion results (Try 3)
+        if: steps.dl_pion2.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          path: all-pion
+          pattern: pion-results-*
+          merge-multiple: false
+      # -------------------------------------
+
+      - name: Pion interop matrix (all platforms)
+        run: |
+          python scripts/pion_matrix_report.py all-pion \
             --output-dir analysis \
             --summary-file "$GITHUB_STEP_SUMMARY"
 

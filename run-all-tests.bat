@@ -167,6 +167,30 @@ if %HAS_EDGE% equ 1 (
     set /a SKIPPED+=1
 )
 
+REM -- Pion interop (Go) ---------------------------------------------
+echo.
+echo ===============================================
+echo   Pion interop (pion/webrtc v5)
+echo ===============================================
+
+where go >nul 2>&1
+if !errorlevel! equ 0 (
+    echo.
+    echo ^> Pion interop
+    go -C pion run . -server-bin "%PREBUILT_SERVER_BINARY%"
+    if !errorlevel! equ 0 (
+        echo   PASSED: Pion interop
+        set /a PASS+=1
+    ) else (
+        echo   FAILED: Pion interop
+        set FAILURES=!FAILURES! "Pion interop"
+        set /a FAIL+=1
+    )
+) else (
+    echo   Skipping Pion interop (go not found^)
+    set /a SKIPPED+=1
+)
+
 REM -- Summary -------------------------------------------------------
 echo.
 echo ===============================================
