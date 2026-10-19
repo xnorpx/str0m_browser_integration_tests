@@ -443,7 +443,8 @@ The full CI runs **~63 browser test jobs** (after exclusions for platform-specif
 
 ```
 ├── .github/workflows/
-│   └── browser-tests.yml          # CI: lint → build → browser tests + Pion interop → analyze
+│   ├── browser-tests.yml          # CI: lint → build → browser tests + Pion interop → analyze
+│   └── nightly.yml                # Daily schedule, runs browser-tests.yml
 ├── pion/                          # Pion (Go) interop runner, see "Pion Interop Matrix"
 │   ├── main.go                    # CLI, spawns the server, runs cases in parallel
 │   ├── matrix.go                  # Suites, cases, expected outcomes
@@ -503,6 +504,8 @@ flowchart TD
 
     build --> |pcapng| analyze
 ```
+
+`browser-tests.yml` runs on every pull request and on manual dispatch. The daily run is a separate `nightly.yml` workflow that calls it. GitHub disables scheduled workflows after 60 days without repository activity, and keeping the schedule out of `browser-tests.yml` means that can't stop PR runs.
 
 Each browser test job:
 1. Downloads the pre-built server binary

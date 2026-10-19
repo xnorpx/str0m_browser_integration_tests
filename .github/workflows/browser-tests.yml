@@ -2,10 +2,10 @@ name: Browser Integration Tests
 
 on:
   pull_request:
-  schedule:
-    # Run daily at 06:00 UTC
-    - cron: '0 6 * * *'
   workflow_dispatch:
+  # The daily run comes from nightly.yml. GitHub disables a scheduled workflow after
+  # 60 days without repository activity, so a schedule here would also stop PR runs.
+  workflow_call:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

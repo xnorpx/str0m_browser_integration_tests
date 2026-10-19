@@ -1,0 +1,11 @@
+name: Nightly
+
+on:
+  schedule:
+    # Run daily at 06:00 UTC
+    - cron: '0 6 * * *'
+
+jobs:
+  browser-tests:
+    name: Browser Integration Tests
+    uses: ./.github/workflows/browser-tests.yml
