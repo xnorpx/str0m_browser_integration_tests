@@ -29,12 +29,19 @@ pub enum DataChannelAction {
     },
 }
 
+pub enum VideoMode {
+    RtpLoopback(crate::protocol::VideoLoopbackConfig),
+    FrameInterop,
+}
+
 pub struct Peer {
     pub rtc: Rtc,
     pub socket: UdpSocket,
     pub local_addr: SocketAddr,
     pending_offer: Option<SdpPendingOffer>,
     netem: Option<(NetemSettings, u64)>,
+    video_loopback: Option<crate::video::VideoLoopback>,
+    frame_video: Option<crate::frame_video::FrameVideo>,
 }
 
 impl Peer {
@@ -54,6 +61,26 @@ impl Peer {
         snap_enabled: bool,
         dtls_version: Option<DtlsVersion>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::with_video(
+            ice_lite,
+            adv_addr,
+            udp_port,
+            cert,
+            snap_enabled,
+            dtls_version,
+            None,
+        )
+    }
+
+    pub fn with_video(
+        ice_lite: bool,
+        adv_addr: IpAddr,
+        udp_port: u16,
+        cert: Option<&DtlsCert>,
+        snap_enabled: bool,
+        dtls_version: Option<DtlsVersion>,
+        video: Option<VideoMode>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let udp_socket = std::net::UdpSocket::bind(SocketAddr::new(adv_addr, udp_port))?;
         let std_socket = udp_socket;
         std_socket.set_nonblocking(true)?;
@@ -61,6 +88,13 @@ impl Peer {
         let local_addr = socket.local_addr()?;
 
         let mut config = RtcConfig::new().set_snap_enabled(snap_enabled);
+        if video.is_some() {
+            use str0m::rtp::dependency_descriptor::{Serializer, URI};
+            config = config
+                .set_rtp_mode(matches!(video, Some(VideoMode::RtpLoopback(_))))
+                .enable_raw_packets(matches!(video, Some(VideoMode::FrameInterop)))
+                .set_extension(14, str0m::rtp::Extension::with_serializer(URI, Serializer));
+        }
 
         if let Some(v) = dtls_version {
             config = config.set_dtls_version(v);
@@ -81,6 +115,17 @@ impl Peer {
             local_addr,
             pending_offer: None,
             netem: None,
+            video_loopback: match video {
+                Some(VideoMode::RtpLoopback(config)) => {
+                    Some(crate::video::VideoLoopback::new(config))
+                }
+                _ => None,
+            },
+            frame_video: if matches!(video, Some(VideoMode::FrameInterop)) {
+                Some(crate::frame_video::FrameVideo::new()?)
+            } else {
+                None
+            },
         };
 
         let candidate = Candidate::host(local_addr, "udp")?;
@@ -160,6 +205,11 @@ impl Peer {
 
         let mut io = PeerIo::new(self.local_addr, self.netem.as_ref());
         let mut report = SessionReport::default();
+        // Keep ICE/DTLS responsive while the first session encodes its fixtures.
+        let mut fixture_worker = self
+            .frame_video
+            .as_ref()
+            .map(|_| tokio::task::spawn_blocking(crate::av1::fixtures));
 
         info!(%session_id, %role, netem = self.netem.is_some(), "Event loop started");
 
@@ -173,6 +223,9 @@ impl Peer {
                 .map_err(|e| format!("handle_input initial timeout: {e}"))?;
 
             loop {
+                if let Some(video) = &mut self.frame_video {
+                    video.send_due(&mut self.rtc)?;
+                }
                 let next_timeout = loop {
                     match self.rtc.poll_output() {
                         Ok(Output::Timeout(t)) => break t,
@@ -181,6 +234,9 @@ impl Peer {
                         }
                         Ok(Output::Event(event)) => match event {
                             Event::Connected => {
+                                if let Some(video) = &mut self.frame_video {
+                                    video.start();
+                                }
                                 if report.connected_ms.is_none() {
                                     report.connected_ms = Some(io.elapsed_ms());
                                 }
@@ -248,6 +304,26 @@ impl Peer {
                                 }
                             }
                             Event::ChannelData(cd) => {
+                                if cd.data == b"video-frame-stats"
+                                    && let Some(video) = &self.frame_video
+                                {
+                                    let json = serde_json::to_vec(&video.report)
+                                        .map_err(|e| format!("Frame stats serialization: {e}"))?;
+                                    self.rtc.channel(cd.id).ok_or("Frame stats channel not found")?
+                                        .write(false, &json).map_err(|e| format!("Frame stats write: {e}"))?;
+                                    continue;
+                                }
+                                if cd.data == b"video-loopback-stats"
+                                    && let Some(video) = &self.video_loopback
+                                {
+                                    let json = serde_json::to_vec(&video.report)
+                                        .map_err(|e| format!("video stats serialization: {e}"))?;
+                                    self.rtc.channel(cd.id)
+                                        .ok_or("Video stats channel not found")?
+                                        .write(false, &json)
+                                        .map_err(|e| format!("video stats write: {e}"))?;
+                                    continue;
+                                }
                                 let text = String::from_utf8_lossy(&cd.data);
                                 debug!(%role, %text, channel_id = ?cd.id, data_len = cd.data.len(), "ChannelData");
 
@@ -280,6 +356,22 @@ impl Peer {
                             }
                             Event::IceConnectionStateChange(state) => {
                                 info!(?state, "ICE connection state changed");
+                            }
+                            Event::MediaAdded(media) if self.video_loopback.is_some() => {
+                                self.video_loopback.as_mut().unwrap().set_media(media)?;
+                            }
+                            Event::MediaAdded(media) if self.frame_video.is_some() => {
+                                self.frame_video.as_mut().unwrap().set_media(&mut self.rtc, media)?;
+                            }
+                            Event::MediaData(data) if self.frame_video.is_some() => {
+                                self.frame_video.as_mut().unwrap().receive(data)?;
+                            }
+                            Event::RawPacket(packet) if self.frame_video.is_some() => {
+                                self.frame_video.as_mut().unwrap().observe(&packet)?;
+                            }
+                            Event::RtpPacket(packet) if self.video_loopback.is_some() => {
+                                self.video_loopback.as_mut().unwrap()
+                                    .forward(&mut self.rtc, packet)?;
                             }
                             other => {
                                 debug!("Event: {other:?}");
@@ -317,12 +409,28 @@ impl Peer {
                 let wake_at = io
                     .next_netem_deadline()
                     .map_or(next_timeout, |d| d.min(next_timeout));
+                let wake_at = self.frame_video.as_ref().and_then(|v| v.deadline())
+                    .map_or(wake_at, |deadline| wake_at.min(deadline));
                 let wait = wake_at.saturating_duration_since(Instant::now());
                 let sleep = tokio::time::sleep(wait);
 
                 tokio::select! {
                     biased;
 
+                    frames = async {
+                        match &mut fixture_worker {
+                            Some(worker) => worker.await,
+                            None => std::future::pending().await,
+                        }
+                    } => {
+                        fixture_worker = None;
+                        let frames = frames
+                            .map_err(|e| format!("AV1 fixture worker failed: {e}"))??;
+                        self.frame_video
+                            .as_mut()
+                            .ok_or("AV1 fixtures completed without a video session")?
+                            .set_frames(frames);
+                    }
                     result = self.socket.recv_from(&mut buf) => {
                         match result {
                             Ok((n, source)) => {
@@ -365,6 +473,17 @@ impl Peer {
             report.error = Some(e);
         }
         io.finish(session_id, role, &mut report);
+        report.video_loopback = self.video_loopback.as_ref().map(|v| v.report.clone());
+        if let Some(video) = &self.frame_video {
+            report.video_frame_mode = Some(Box::new(video.report.clone()));
+            if let Err(error) = video.save_profile(session_id) {
+                warn!(%session_id, %error, "DD profile persistence failed");
+                report.error = Some(match report.error {
+                    Some(previous) => format!("{previous}; {error}"),
+                    None => error,
+                });
+            }
+        }
         report
     }
 }

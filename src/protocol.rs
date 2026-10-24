@@ -48,6 +48,12 @@ pub struct SessionConfig {
     /// `--netem*` command line defaults apply.
     #[serde(default)]
     pub server_netem: Option<NetemSettings>,
+    /// AV1 RTP loopback with dependency-descriptor validation and optional filtering.
+    #[serde(default)]
+    pub video_loopback: Option<VideoLoopbackConfig>,
+    /// Independent AV1 encoding/decoding in frame mode, with DD packet profiling.
+    #[serde(default)]
+    pub video_frame_mode: bool,
 }
 
 impl SessionConfig {
@@ -64,8 +70,32 @@ impl SessionConfig {
             server_dtls_version: ServerDtlsVersion::Auto,
             server_snap: None,
             server_netem: None,
+            video_loopback: None,
+            video_frame_mode: false,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VideoLoopbackConfig {
+    /// Zero-based received frame index at which filtering starts.
+    pub drop_start: u64,
+    /// Number of input frames in the filtering window; zero means forward everything.
+    pub drop_duration: u64,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VideoLoopbackReport {
+    pub packets_received: u64,
+    pub descriptors_parsed: u64,
+    pub structures_received: u64,
+    pub frames_received: u64,
+    pub frames_forwarded: u64,
+    pub frames_dropped: u64,
+    pub packets_dropped: u64,
+    pub enhancement_frames_forwarded_after_drop: u64,
+    pub max_temporal_id: u8,
 }
 
 /// Named str0m-netem presets (`NetemConfig::wifi()` etc).
@@ -146,6 +176,8 @@ pub struct SessionReport {
     pub packets_received: u64,
     pub netem_egress: Option<NetemStats>,
     pub netem_ingress: Option<NetemStats>,
+    pub video_loopback: Option<VideoLoopbackReport>,
+    pub video_frame_mode: Option<Box<crate::frame_video::FrameVideoReport>>,
     /// Set when the peer event loop ended with an error.
     pub error: Option<String>,
 }

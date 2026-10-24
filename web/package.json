@@ -6,6 +6,8 @@
   "scripts": {
     "test": "karma start karma.conf.js --single-run",
     "test:chrome": "karma start karma.conf.js --single-run --browsers ChromeHeadless",
+    "test:video:chrome": "karma start karma.video.conf.js --single-run --browsers ChromeHeadlessWebRTC && node ../scripts/compare-dd-pcap.js",
+    "test:video:edge": "karma start karma.video.conf.js --single-run --browsers EdgeHeadless && node ../scripts/compare-dd-pcap.js",
     "test:edge": "karma start karma.conf.js --single-run --browsers EdgeHeadless",
     "test:firefox": "karma start karma.conf.js --single-run --browsers FirefoxHeadless",
     "test:safari": "karma start karma.conf.js --single-run --browsers Safari",

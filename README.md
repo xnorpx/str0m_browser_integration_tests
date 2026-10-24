@@ -31,7 +31,7 @@ This repo captures pcaps from every test permutation so we can **observe and qua
 
 > **Note:** DTLS 1.3 is enabled by default in Chrome/Edge since Oct 2025. The server's `server_dtls_version: "auto"` (the default) maps to str0m's `DtlsVersion::Auto`, so browsers negotiate DTLS 1.3 on every backend that supports it (all dimpl based ones: `aws-lc-rs`, `rust-crypto`, `apple-crypto`, `openssl-dimpl`, `wincrypto-dimpl`); the plain `openssl` backend is DTLS 1.2 only and `auto` falls back to 1.2 there. SNAP is verified in browser, Pion and native Rust-to-Rust tests. Safari is tested natively on macOS via `safaridriver`, though explicit DTLS 1.3 and SNAP tests are currently skipped as Safari does not yet fully support these natively.
 
-> **Dependencies:** `str0m` and `str0m-netem` track the upstream [str0m `main` branch](https://github.com/algesten/str0m/tree/main). `Cargo.lock` isn't committed, so every build picks up the latest `main`.
+> **Dependencies:** `str0m` and `str0m-netem` track the upstream [str0m `dev/dd` branch](https://github.com/algesten/str0m/tree/dev/dd) for dependency-descriptor support. `Cargo.lock` isn't committed; fresh dependency resolution uses that branch. Run `cargo update` to refresh an existing lockfile.
 
 ## Architecture Overview
 
@@ -351,6 +351,7 @@ Each feature test runs `offerer` and `answerer` variants against ICE-Lite.
 | `ice` | 12 | str0m ICE full instead of lite |
 | `netem` | 96 | str0m-netem profiles `loss5`, `loss15`, `burst`, `delay` × DTLS versions × SNAP on/off × both role pairs |
 | `longlived` | 4 | Idle 45 s before a second echo (past the 40 s DTLS handshake deadline), str0m as DTLS client and server |
+| `video` | 2 | Pion receives str0m AV1/DD in both DTLS roles; LiveKit independently parses full DD semantics and Pion's received headers match str0m's source profile |
 
 Expected outcomes are computed per case, for example `auto` vs `1.2` must negotiate 1.2, `auto` vs `auto` 1.3. When the server's crypto backend has no DTLS 1.3 (plain `openssl`), `auto` means 1.2 there and the str0m 1.3 cases are skipped. Failures that match a **known upstream issue** are reported as ⚠️ (`xfail`) and don't fail the run:
 
@@ -368,6 +369,254 @@ go -C pion run . -list                                        # print case names
 ```
 
 Without `-server-bin` the runner uses `$PREBUILT_SERVER_BINARY` or builds the server with cargo (`npm run test:pion` does exactly that). Results go to `target/pion-interop/`: `results.json`, `summary.md` (tables like the ones in the CI step summary), `server.log` and per-case Pion logs for failures (`-keep-logs` keeps them all). Pcaps are written to `target/pcap/` as `pion_<suite>_<pion sdp>_<pion dtls role>_<ice>_s<str0m dtls>_p<pion dtls>_snap<mode>[_<netem>]_server.pcapng`. Useful flags: `-parallel`, `-netem-profiles`, `-hold`, `-pion-log`, `-server-args "--netem loss=2"` and `-summary-md`. To try a newer Pion, run `go get github.com/pion/webrtc/v5@next` in `pion/`.
+
+## Dependency descriptor video loopback interop
+
+The dedicated Chromium suite sends a generated, animated 640x360 canvas at 30 fps.
+No camera, media files, or capture permissions are required. Chrome encodes AV1
+with `L1T3` (one spatial layer, three temporal layers); str0m acts as a single-stream
+RTP-mode loopback SFU, and the same browser decodes and renders the forwarded video.
+
+```bash
+npm ci --prefix web
+npm run test:video:chrome
+npm run test:video:edge
+cargo test --lib video::tests
+```
+
+Karma builds and stops the server automatically. `PREBUILT_SERVER_BINARY` skips the
+build; `CHROME_BIN` selects a nonstandard Chrome installation. The suite uses native
+Chromium launchers rather than WebDriver. A browser without AV1 or DD fails explicitly,
+with no codec fallback or capability skip. Firefox and Safari are not part of this suite.
+CI runs both video suites across the existing OS/crypto matrix; both all-tests scripts
+also include them when the corresponding browser is installed.
+
+Three cases run:
+
+1. **No-drop control:** negotiate DD in both offer and answer, parse DD on every
+   non-padding video packet, and confirm AV1 decoding and rendered frames advance.
+2. **DD-guided filtering and resumption:** forward the first 60 input frames, then
+   filter eligible frames during the next 120 input frames, then resume forwarding
+   all layers. Only temporal-layer-2 frames whose decode-target indications are all
+   `NotPresent` or `Discardable` are dropped. Frames carrying a shared structure are
+   always forwarded. The decision applies to every packet of a frame.
+3. **Bidirectional frame-mode interop:** independently encode and decode real AV1
+   at both endpoints, and verify DD serialization, deserialization and wire placement
+   in both directions (details below).
+
+The SFU preserves encoded payloads, RTP timestamps, and original DD bytes/frame
+numbers, while assigning consecutive outgoing RTP sequence numbers. Intentional
+filtering therefore cannot be repaired by NACK/RTX, and retained frames keep their
+original dependency references. Pure RTP-padding bandwidth probes are not video
+frames and are excluded from DD counters.
+
+Assertions require a shared DD structure, temporal layer 2 actually present, real
+frame and packet drops, decoding/rendering progress **during** filtering, and at
+least 30 additional decoded frames plus 20 forwarded enhancement frames **after**
+resumption. The selective-drop case must not require another decoded keyframe.
+This tests safe temporal filtering, not arbitrary loss of reference frames or
+PLI/keyframe recovery after a broken dependency chain.
+
+The optional create configuration enables this behavior without changing existing
+data-channel sessions:
+
+```json
+{"type": "create", "session_id": "dd_video", "config": {
+  "client_sdp_role": "offerer", "server_ice_mode": "lite", "client_dtls_role": "active",
+  "server_netem": {},
+  "video_loopback": {"drop_start": 60, "drop_duration": 120}
+}}
+```
+
+`drop_start` is a zero-based input-frame index, and `drop_duration: 0` selects the
+control. This mode requires one sendrecv video m-line and one RTP source.
+The browser suite explicitly disables netem to isolate intentional SFU filtering.
+Sending `video-loopback-stats` on its data channel returns live
+`VideoLoopbackReport` JSON. The final `destroyed.report.video_loopback` carries the
+same counters, and `destroyed.report.error` exposes peer failures.
+Browser logs contain baseline/filter/resumption/decoder snapshots; captures are
+saved as `target/pcap/{chrome|edge}_dd_av1_{control|drop}_server.pcapng`.
+
+### AV1 frame-mode interop and packet profiling
+
+The third case uses **frame mode**, not RTP forwarding:
+
+| Direction | Encoder | Network path | Decoder |
+|---|---|---|---|
+| Chrome to Rust | Chrome AV1, animated textured 320x180, L1T3 | Chrome RTP/DD serialization -> str0m RTP/DD parsing and AV1 depacketization -> `MediaData` | `rusty_av1d` |
+| Rust to Chrome | `rav1e`, deterministic 160x96 at 10 fps, low-latency L1T1 | `Writer::user_extension_value(DD).write(...)` -> str0m AV1 packetization/DD serialization -> Chrome RTP/DD parsing | Chrome AV1 |
+
+Rust sends 32 independently encoded frames: two keyframes and 30 delta frames.
+DD numbers start at 65530, so the test crosses the 16-bit frame-number wrap.
+Keyframes attach a shared structure; delta frames conservatively depend on the
+previous frame, retaining the full dependency chain since the last keyframe.
+The streams are independent: Chrome is not decoding its own looped-back payload.
+
+The crates.io dependencies are `rav1e` 0.8.1 (default features, including assembly
+and binaries, disabled) and `rusty_av1d` 1.2.1 (default features disabled, only
+`bitdepth_8` enabled). Both codec packages are **BSD-2-Clause** licensed;
+no AGPL decoder is used. The decoder exposes the upstream-style safe Rust API
+and builds without assembly or an external C decoder library. Harness
+codec/profiling modules forbid unsafe code, but the decoder's implementation
+and other transitive dependencies do contain unsafe code.
+
+At runtime, checks require:
+
+- All 32 Rust frames, including both keyframes, decoded by Chrome, with rendering
+  progress and correct dimensions.
+- At least 32 Chrome frames decoded into real 8-bit YUV planes by rusty_av1d,
+  correct dimensions, and more than 16 distinct luma checksums.
+- DD on every non-padding AV1 packet, parsed with per-direction shared-structure
+  state, then serialized and parsed again with identical semantics.
+- Frame-mode `MediaData.ext_vals` preserving the first incoming packet's exact DD
+  bytes, including its shared structure and original packet flags.
+- Actual outgoing pre-SRTP RTP bytes containing the same DD as packet metadata,
+  checked independently for both RFC 8285 extension forms.
+- Single-packet and multi-packet frames in **both** directions; exactly one first
+  and last flag per frame, stable DD frame number and RTP timestamp within the
+  frame, RTP marker matching DD's last flag, and no structure on continuation packets.
+
+The Rust peer saves a JSON packet profile at:
+
+```text
+target/dd-profile/chrome_dd_av1_frame_mode.json
+```
+
+The profile contains a report plus per-direction packet samples: elapsed
+milliseconds since ICE/DTLS connected, SSRC, PT, sequence number, RTP timestamp, extended DD frame number,
+packet index within the frame, first/last flags, marker, structure presence,
+DD length and hex bytes, and packet size. `video-frame-stats` on the data channel
+returns live summary counters; `destroyed.report.video_frame_mode` returns the final
+report. Profiles flag any incomplete final frame explicitly. The browser pauses
+canvas drawing and drains queued packets before teardown, rather than stopping a
+track halfway through an encoded frame. Profiles are uploaded by CI and pcaps remain
+available separately.
+
+A successful Chrome 156 run observed:
+
+| DD packet category | Chrome to Rust | Rust to Chrome |
+|---|---:|---:|
+| First only (`S=1,E=0`) | 83 | 2 |
+| Middle (`S=0,E=0`) | 82 | 10 |
+| Last only (`S=0,E=1`) | 83 | 2 |
+| Single packet (`S=1,E=1`) | 20 | 30 |
+| Shared structures (first packets only) | 1 | 2 |
+| Complete frames | 103 | 32 |
+| DD serialize/deserialize checks | 268 | 44 |
+
+DD was present on **every media packet**, not just first or last packets.
+Only the first packet of a keyframe carried the shared structure. In frame mode,
+the returned frame metadata retained the **first packet's** DD; consequently a
+multi-packet frame's metadata had `S=1,E=0`, not rewritten `S=1,E=1`.
+Counts and timing vary with Chrome pacing and bitrate; the assertions verify
+placement invariants rather than exact browser packet counts.
+
+In that run, Chrome emitted 267 three-byte descriptors and one 20-byte descriptor
+on the first keyframe packet, 12.27 ms after connection. Rust emitted 30 three-byte
+descriptors on single-packet delta frames, twelve five-byte descriptors on keyframe
+continuations, and two eight-byte descriptors with structures on the keyframes'
+first packets (2.36 ms and 1918.91 ms after connection). These lengths are **DD
+value bytes only**, excluding the RTP extension element header and padding.
+
+Run codec/profiler tests without a browser:
+
+```bash
+cargo test --lib av1::tests
+cargo test --lib frame_video::tests
+```
+
+### Independent PCAP header comparison
+
+Both video npm commands also run `scripts/compare-dd-pcap.js` after Karma succeeds.
+The standalone Node verifier has no dependencies on str0m or its DD parser. It reads
+the saved PCAPNG, parses IPv4/UDP and RTP (including CSRCs and both RFC 8285 extension
+forms), and selects the DD extension using the negotiated ID recorded in profile
+schema version 2.
+
+For **every profiled media packet in both directions**, it requires exact agreement
+on SSRC, PT, sequence number, timestamp, marker and DD bytes. It independently checks
+the mandatory DD fields, shared-structure-present bit, frame boundaries, packet
+indices, stable per-frame timestamps, and Rust's DD frame-number wrap. Missing,
+extra or changed media packets fail the npm command. Its side-by-side summary
+includes first/middle/last placement, DD sizes, template IDs and extension profiles.
+
+```bash
+npm run test:pcap         # verifier unit tests, no browser required
+npm run compare:dd-pcap   # recheck the existing capture/profile
+```
+
+Inputs and output:
+
+```text
+target/pcap/chrome_dd_av1_frame_mode_server.pcapng
+target/dd-profile/chrome_dd_av1_frame_mode.json
+target/dd-profile/chrome_dd_av1_frame_mode_pcap_comparison.json
+```
+
+CI uploads the comparison with the other DD profiles. Custom files can be supplied
+as three positional arguments: capture, runtime profile, comparison output.
+
+**What this establishes:** the capture contains the actual SRTP UDP bytes received
+from Chrome and emitted by str0m, not reconstructed RTP from parsed metadata.
+Ordinary, unencrypted RTP header extensions remain visible under SRTP, so keys are
+not required for these checks. The harness synthesizes the IPv4/UDP envelopes; this
+is an application-boundary capture, not an OS/NIC capture or a separate capture inside
+Chrome. Egress is captured before netem and ingress after netem.
+
+The streams have different encoders, resolutions and temporal structures, so their
+RTP/DD headers should **not** be identical to each other. The verifier compares each
+direction against its own runtime observations and checks common wire invariants.
+It does not independently parse all optional DD dependencies/templates; the existing
+stateful DD roundtrips and actual AV1 decoding complement this wire-level check.
+Missing-DD packets with RTP's padding flag are counted separately as probe candidates:
+their encrypted padding length cannot be independently verified without SRTP keys.
+Expected media packets must still all match, so a missing expected DD cannot pass
+by being classified as padding.
+
+### Pion AV1/DD receiver interop
+
+```bash
+npm run test:pion:video
+# Or select the server binary and retain results separately:
+go -C pion run . -suites video -server-bin ../target/debug/server -out ../target/pion-dd-interop
+go -C pion test ./...
+```
+
+The existing Pion runner's default matrix now includes two `video` cases: Pion is
+the SDP offerer with ICE-lite str0m, once in each DTLS role. It negotiates AV1 and
+the DD URI, receives the 32 rav1e frames through real SRTP, and obtains the extension
+using Pion's negotiated ID (not Chrome's hard-coded ID). A bound but unsent local
+track negotiates the sendrecv m-line required by the frame-mode harness.
+
+**Pion's RTP library exposes raw header extensions; the pinned version does not
+provide a semantic DD parser.** The receiver therefore uses only the standalone
+`dependencydescriptor` package from **LiveKit v1.9.0 (Apache-2.0)**. The LiveKit server
+itself is not linked. No AGPL dependency is introduced.
+
+For every received packet, the independent parser must resolve the shared structure,
+templates, spatial/temporal IDs, decode-target indications and frame dependencies.
+The expected L1T1 semantics are `Switch` with no dependency on keyframes, and
+`Required` with frame difference 1 on delta frames. Each descriptor is serialized
+and reparsed by LiveKit with identical semantics; canonical bytes may differ from
+str0m's template encoding.
+
+The cases require all 32 frames, two shared structures, DD frame-number rollover,
+single- and multi-packet frames, valid boundaries and marker flags. After destroying
+the session, **every Pion-received RTP identity, marker and raw DD byte string must
+also match str0m's saved outgoing packet profile**. Packet counts and structure
+counts must agree with the final server report. Missing profiles or mismatches
+fail the case.
+
+Pion reports include complete received-header and parsed-descriptor samples in
+`results.json`, plus a DD summary table in `summary.md`. The existing CI Pion matrix
+runs these cases and uploads their results, PCAPs and source profiles. Unit tests
+use fixed str0m wire encodings and negative cases, rather than only generating
+descriptors with the parser under test.
+
+This verifies **RTP/DD transport and semantic parsing, not Pion AV1 decoding**.
+Actual video decoding remains covered by Chrome and rusty_av1d. Initial AV1 fixture
+encoding runs concurrently with the peer event loop, so cold-start encoding cannot
+stall ICE/DTLS processing.
 
 ## Network emulation (str0m-netem)
 
@@ -437,7 +686,9 @@ graph LR
     Crypto --- PionInterop
 ```
 
-The full CI runs **~63 browser test jobs** (after exclusions for platform-specific crypto backends and browser compatibility) plus **10 Pion interop jobs** (one per OS × crypto backend, 168 cases each).
+The full CI includes base browser, SNAP, and DD video jobs (after exclusions for
+platform-specific crypto backends and browser compatibility), plus **10 Pion interop
+jobs** (one per OS × crypto backend, 168 cases each).
 
 ## Project Structure
 
@@ -461,6 +712,9 @@ The full CI runs **~63 browser test jobs** (after exclusions for platform-specif
 │   ├── server.rs                  # WebSocket signaling handler
 │   ├── client.rs                  # WS client helpers (used by Rust tests)
 │   ├── peer.rs                    # str0m Rtc event loop + netem + pcap capture
+│   ├── video.rs                   # DD validation and RTP-mode temporal-frame filtering
+│   ├── av1.rs                     # Safe-API AV1 codec fixtures and decoded image checksums
+│   ├── frame_video.rs             # Full-duplex frame-mode AV1 and DD packet profiling
 │   ├── netem.rs                   # str0m-netem integration and spec parsing
 │   ├── protocol.rs                # JSON signaling message types
 │   ├── pcap.rs                    # pcapng file writer

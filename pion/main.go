@@ -145,7 +145,7 @@ func run() int {
 		url, info.Crypto, info.Dtls13, len(cases), *parallel)
 
 	env := &runEnv{
-		wsURL: url, info: info, logDir: logDir, logLevel: level, keepLogs: *keepLogs,
+		wsURL: url, info: info, logDir: logDir, workdir: root, logLevel: level, keepLogs: *keepLogs,
 		openTimeout: *openTO, netemTimeout: *netemTO, rejectTimeout: *rejectTO,
 	}
 

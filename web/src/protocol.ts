@@ -41,6 +41,47 @@ export interface SessionConfig {
   /** Whether str0m offers SNAP (a=sctp-init). Defaults to true. */
   server_snap?: boolean;
   server_netem?: NetemSettings;
+  video_loopback?: {drop_start: number; drop_duration: number};
+  video_frame_mode?: boolean;
+}
+
+export interface DdPacketSummary {
+  packets: number;
+  frames: number;
+  single_packet_frames: number;
+  multi_packet_frames: number;
+  first_only: number;
+  middle: number;
+  last_only: number;
+  first_and_last: number;
+  structures: number;
+  semantic_roundtrips: number;
+  dd_bytes: number;
+}
+
+export interface FrameVideoReport {
+  rust_frames_encoded: number;
+  rust_frames_sent: number;
+  chrome_frames_received: number;
+  rust_frames_decoded: number;
+  rust_unique_decoded_images: number;
+  decoded_width: number;
+  decoded_height: number;
+  frame_dd_roundtrips: number;
+  chrome_to_rust: DdPacketSummary;
+  rust_to_chrome: DdPacketSummary;
+}
+
+export interface VideoLoopbackReport {
+  packets_received: number;
+  descriptors_parsed: number;
+  structures_received: number;
+  frames_received: number;
+  frames_forwarded: number;
+  frames_dropped: number;
+  packets_dropped: number;
+  enhancement_frames_forwarded_after_drop: number;
+  max_temporal_id: number;
 }
 
 export interface NetemStats {
@@ -58,6 +99,8 @@ export interface SessionReport {
   packets_received: number;
   netem_egress: NetemStats | null;
   netem_ingress: NetemStats | null;
+  video_loopback: VideoLoopbackReport | null;
+  video_frame_mode: FrameVideoReport | null;
   error: string | null;
 }
 

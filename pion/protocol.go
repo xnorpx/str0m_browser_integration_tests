@@ -11,6 +11,7 @@ type SessionConfig struct {
 	ServerDtlsVersion string         `json:"server_dtls_version"`
 	ServerSnap        *bool          `json:"server_snap,omitempty"`
 	ServerNetem       *NetemSettings `json:"server_netem,omitempty"`
+	VideoFrameMode    bool           `json:"video_frame_mode,omitempty"`
 }
 
 // NetemLink configures one direction of str0m-netem on the server.
@@ -44,14 +45,26 @@ type NetemStats struct {
 
 // SessionReport is the str0m side's view of a session, sent with "destroyed".
 type SessionReport struct {
-	DtlsVersion     *string     `json:"dtls_version"`
-	ConnectedMs     *float64    `json:"connected_ms"`
-	ChannelOpenMs   *float64    `json:"channel_open_ms"`
-	PacketsSent     uint64      `json:"packets_sent"`
-	PacketsReceived uint64      `json:"packets_received"`
-	NetemEgress     *NetemStats `json:"netem_egress"`
-	NetemIngress    *NetemStats `json:"netem_ingress"`
-	Error           *string     `json:"error"`
+	DtlsVersion     *string           `json:"dtls_version"`
+	ConnectedMs     *float64          `json:"connected_ms"`
+	ChannelOpenMs   *float64          `json:"channel_open_ms"`
+	PacketsSent     uint64            `json:"packets_sent"`
+	PacketsReceived uint64            `json:"packets_received"`
+	NetemEgress     *NetemStats       `json:"netem_egress"`
+	NetemIngress    *NetemStats       `json:"netem_ingress"`
+	Error           *string           `json:"error"`
+	VideoFrameMode  *FrameVideoReport `json:"video_frame_mode,omitempty"`
+}
+
+type DdPacketSummary struct {
+	Packets    uint64 `json:"packets"`
+	Frames     uint64 `json:"frames"`
+	Structures uint64 `json:"structures"`
+}
+
+type FrameVideoReport struct {
+	RustFramesSent uint64          `json:"rust_frames_sent"`
+	RustToChrome   DdPacketSummary `json:"rust_to_chrome"`
 }
 
 // ClientMessage is any message sent to the server.
