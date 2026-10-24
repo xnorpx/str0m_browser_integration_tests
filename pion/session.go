@@ -43,12 +43,14 @@ type Result struct {
 	LogFile        string  `json:"log_file,omitempty"`
 
 	Str0m *SessionReport `json:"str0m,omitempty"`
+	Video *DDVideoReport `json:"video,omitempty"`
 }
 
 type runEnv struct {
 	wsURL         string
 	info          ServerInfo
 	logDir        string
+	workdir       string
 	logLevel      logging.LogLevel
 	keepLogs      bool
 	openTimeout   time.Duration
@@ -109,6 +111,7 @@ type observation struct {
 	failure   string
 	holdError string
 	pionError string
+	video     *DDVideoReport
 }
 
 func runCase(c Case, exp Expectation, env *runEnv) (res Result) {
@@ -171,6 +174,12 @@ func runCase(c Case, exp Expectation, env *runEnv) (res Result) {
 	if pc != nil {
 		_ = pc.Close()
 	}
+	if c.Suite == "video" && obs.setupErr == nil && obs.video != nil {
+		profile := filepath.Join(env.workdir, "target", "dd-profile", c.Name+".json")
+		if err := compareVideoSource(obs.video, profile); err != nil {
+			obs.setupErr = err
+		}
+	}
 
 	evaluate(&res, obs)
 	applyKnownIssues(&res, env.info)
@@ -224,6 +233,7 @@ func evaluate(res *Result, obs observation) {
 	res.PionDtls, res.SnapNegotiated = obs.pionDtls, obs.snap
 	res.PionDtlsError = obs.pionError
 	res.PionState = obs.state.String()
+	res.Video = obs.video
 	if r := res.Str0m; r != nil && r.DtlsVersion != nil {
 		res.Str0mDtls = *r.DtlsVersion
 	}
@@ -258,6 +268,11 @@ func evaluate(res *Result, obs observation) {
 		if obs.snap != exp.Snap {
 			problems = append(problems, fmt.Sprintf("SNAP negotiated=%v, expected %v", obs.snap, exp.Snap))
 		}
+		if res.Suite == "video" && obs.setupErr == nil {
+			if err := validateVideoReport(obs.video, res.Str0m); err != nil {
+				problems = append(problems, err.Error())
+			}
+		}
 	}
 	if r := res.Str0m; r == nil {
 		problems = append(problems, "no report from str0m")
@@ -275,7 +290,7 @@ func evaluate(res *Result, obs observation) {
 
 // pionAPI builds a Pion API for one case. Candidates are restricted to IPv4
 // loopback to match the server, which advertises 127.0.0.1.
-func pionAPI(c Case, logs *caseLog, level logging.LogLevel) *webrtc.API {
+func pionAPI(c Case, logs *caseLog, level logging.LogLevel) (*webrtc.API, error) {
 	se := webrtc.SettingEngine{
 		LoggerFactory: &logging.DefaultLoggerFactory{
 			Writer:          logs,
@@ -309,14 +324,33 @@ func pionAPI(c Case, logs *caseLog, level logging.LogLevel) *webrtc.API {
 		}
 		_ = se.SetAnsweringDTLSRole(role)
 	}
-	return webrtc.NewAPI(webrtc.WithSettingEngine(se))
+	if c.Suite == "video" {
+		media := &webrtc.MediaEngine{}
+		if err := media.RegisterCodec(webrtc.RTPCodecParameters{
+			RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeAV1, ClockRate: 90000},
+			PayloadType:        45,
+		}, webrtc.RTPCodecTypeVideo); err != nil {
+			return nil, err
+		}
+		if err := media.RegisterHeaderExtension(webrtc.RTPHeaderExtensionCapability{URI: ddURI},
+			webrtc.RTPCodecTypeVideo); err != nil {
+			return nil, err
+		}
+		return webrtc.NewAPI(webrtc.WithSettingEngine(se), webrtc.WithMediaEngine(media)), nil
+	}
+	return webrtc.NewAPI(webrtc.WithSettingEngine(se)), nil
 }
 
 // runPion does signaling plus the data channel echo. The str0m side forces its
 // own DTLS role for "offerer/passive", so Pion only needs to pick it when answering.
 func runPion(c Case, exp Expectation, env *runEnv, sig *signaling, logs *caseLog) (*webrtc.PeerConnection, observation) {
 	var obs observation
-	pc, err := pionAPI(c, logs, env.logLevel).NewPeerConnection(webrtc.Configuration{})
+	api, err := pionAPI(c, logs, env.logLevel)
+	if err != nil {
+		obs.setupErr = err
+		return nil, obs
+	}
+	pc, err := api.NewPeerConnection(webrtc.Configuration{})
 	if err != nil {
 		obs.setupErr = err
 		return nil, obs
@@ -335,6 +369,14 @@ func runPion(c Case, exp Expectation, env *runEnv, sig *signaling, logs *caseLog
 	fail := func(err error) (*webrtc.PeerConnection, observation) {
 		obs.setupErr = err
 		return finish()
+	}
+
+	var videoDone <-chan ddVideoResult
+	if c.Suite == "video" {
+		videoDone, err = attachDDVideo(pc)
+		if err != nil {
+			return fail(err)
+		}
 	}
 
 	opened := make(chan *webrtc.DataChannel, 1)
@@ -427,6 +469,10 @@ func runPion(c Case, exp Expectation, env *runEnv, sig *signaling, logs *caseLog
 
 	obs.snap = hasSctpInit(pc.LocalDescription().SDP) && hasSctpInit(pc.RemoteDescription().SDP)
 	logs.printf("SDP done (snap=%v), local SDP:\n%s\nremote SDP:\n%s", obs.snap, pc.LocalDescription().SDP, pc.RemoteDescription().SDP)
+	if c.Suite == "video" && (!strings.Contains(pc.LocalDescription().SDP, ddURI) ||
+		!strings.Contains(pc.RemoteDescription().SDP, ddURI)) {
+		return fail(errors.New("DD was not negotiated in both SDPs"))
+	}
 
 	t0 := time.Now()
 	if err := sig.send(ClientMessage{Type: "ready"}); err != nil {
@@ -466,6 +512,18 @@ func runPion(c Case, exp Expectation, env *runEnv, sig *signaling, logs *caseLog
 					obs.holdError = fmt.Sprintf("no echo after %s idle", c.Hold)
 				}
 			}
+		}
+	}
+
+	if videoDone != nil && obs.echoed {
+		select {
+		case result := <-videoDone:
+			obs.video = result.report
+			if result.err != nil {
+				return fail(fmt.Errorf("Pion DD receive: %w", result.err))
+			}
+		case <-time.After(openTimeout):
+			return fail(errors.New("timed out receiving 32 AV1/DD frames in Pion"))
 		}
 	}
 

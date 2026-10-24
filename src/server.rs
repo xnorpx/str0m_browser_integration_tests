@@ -1,7 +1,7 @@
 use crate::{
     Session, Sessions, UdpPortAllocator,
     netem::session_seed,
-    peer::{DataChannelAction, Peer},
+    peer::{DataChannelAction, Peer, VideoMode},
     protocol::*,
 };
 use futures_util::{SinkExt, StreamExt};
@@ -286,19 +286,43 @@ fn handle_client_message(
             if let Some(Err(e)) = netem.as_ref().map(NetemSettings::validate) {
                 return error_response(session_id, format!("Invalid server_netem: {e}"));
             }
+            if config.video_frame_mode
+                && (config.video_loopback.is_some() || config.client_sdp_role != SdpRole::Offerer)
+            {
+                return error_response(
+                    session_id,
+                    "Frame interop requires browser offerer and cannot use RTP loopback".into(),
+                );
+            }
+            if let Some(video) = config.video_loopback {
+                if config.client_sdp_role != SdpRole::Offerer {
+                    return error_response(
+                        session_id,
+                        "Video loopback requires browser offerer".into(),
+                    );
+                }
+                if video.drop_start.checked_add(video.drop_duration).is_none() {
+                    return error_response(session_id, "Video drop window overflows".into());
+                }
+            }
 
             let ice_lite = config.server_ice_mode == IceMode::Lite;
             let snap_enabled = config.server_snap.unwrap_or(true);
             let udp_port = udp_ports.next_port();
             let cert = crate::shared_dtls_cert();
 
-            let mut peer = match Peer::with_cert(
+            let mut peer = match Peer::with_video(
                 ice_lite,
                 adv_addr,
                 udp_port,
                 Some(cert),
                 snap_enabled,
                 Some(dtls_version),
+                if config.video_frame_mode {
+                    Some(VideoMode::FrameInterop)
+                } else {
+                    config.video_loopback.map(VideoMode::RtpLoopback)
+                },
             ) {
                 Ok(p) => p,
                 Err(e) => return error_response(session_id, format!("Failed to create peer: {e}")),

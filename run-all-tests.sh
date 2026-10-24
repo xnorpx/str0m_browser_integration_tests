@@ -111,6 +111,19 @@ else
   echo -e "${CYAN}[SKIP] Skipping SNAP Edge (not found)${NC}"; ((SKIPPED+=1))
 fi
 
+# -- Dependency descriptor video interop ------------------------------
+if $has_chrome; then
+  run "DD Video · Chrome" npm run test:video:chrome
+else
+  echo -e "${CYAN}[SKIP] Skipping DD Video Chrome (not found)${NC}"; ((SKIPPED+=1))
+fi
+
+if $has_edge; then
+  run "DD Video · Edge" npm run test:video:edge
+else
+  echo -e "${CYAN}[SKIP] Skipping DD Video Edge (not found)${NC}"; ((SKIPPED+=1))
+fi
+
 # -- Pion interop (Go) ------------------------------------------------
 echo -e "\n${BOLD}===============================================${NC}"
 echo -e "${BOLD}  Pion interop (pion/webrtc v5)${NC}"

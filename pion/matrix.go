@@ -95,7 +95,7 @@ func netemProfile(name string) (NetemProfile, bool) {
 }
 
 // Suites in the order they are reported.
-var allSuites = []string{"dtls", "snap", "ice", "netem", "longlived"}
+var allSuites = []string{"dtls", "snap", "ice", "netem", "longlived", "video"}
 
 var suiteTitles = map[string]string{
 	"dtls":      "DTLS version × role matrix",
@@ -103,6 +103,7 @@ var suiteTitles = map[string]string{
 	"ice":       "str0m ICE full",
 	"netem":     "str0m-netem (loss / delay on the str0m side)",
 	"longlived": "Long-lived sessions",
+	"video":     "AV1 dependency descriptors (Pion + LiveKit parser)",
 }
 
 // Case is one Pion <-> str0m session.
@@ -141,6 +142,7 @@ func (c Case) sessionConfig() SessionConfig {
 		ServerDtlsVersion: string(c.Str0mVer),
 		ServerSnap:        &snap,
 		ServerNetem:       c.netemSettings(),
+		VideoFrameMode:    c.Suite == "video",
 	}
 }
 
@@ -167,6 +169,10 @@ func buildCases(suites []string, profiles []string, hold time.Duration) []Case {
 		for _, sdp := range sdpRoles {
 			for _, role := range dtlsRoles {
 				switch suite {
+				case "video":
+					if sdp == "offerer" {
+						cases = append(cases, newCase(suite, sdp, role, "lite", DtlsAuto, DtlsAuto, SnapOff, ""))
+					}
 				case "dtls":
 					// Every str0m version against every Pion version, incompatible pairs included.
 					for _, sv := range allVersions {

@@ -52,6 +52,7 @@ jobs:
             exit 1
           fi
           go vet ./...
+          go test ./...
 
   # Build the Rust server binary per OS x crypto provider
   build-server:
@@ -165,6 +166,8 @@ jobs:
           - { name: "Base · Firefox", script: "test:firefox" }
           - { name: "Base · Safari",  script: "test:safari" }
           - { name: "SNAP · Chrome",  script: "test:snap:chrome" }
+          - { name: "DD Video · Chrome", script: "test:video:chrome" }
+          - { name: "DD Video · Edge", script: "test:video:edge" }
         exclude:
           # OpenSSL only on Linux
           - { os: macos-latest,   crypto: openssl }
@@ -244,6 +247,17 @@ jobs:
           PREBUILT_SERVER_BINARY: ${{ github.workspace }}/target/release/${{ matrix.bin }}
           DEBUG: pw:browser,pw:api
         run: npm run ${{ matrix.test.script }}
+      - name: Test independent PCAP verifier
+        if: startsWith(matrix.test.script, 'test:video:')
+        run: npm run test:pcap
+      - name: Upload DD frame-mode packet profiles
+        if: always() && startsWith(matrix.test.script, 'test:video:')
+        uses: actions/upload-artifact@v7
+        with:
+          name: dd-profile-${{ matrix.os-slug }}-${{ matrix.crypto }}-${{ matrix.test.name }}
+          path: target/dd-profile/
+          retention-days: 5
+          if-no-files-found: ignore
       - name: Sanitize artifact name
         if: always()
         id: artifact
@@ -354,6 +368,15 @@ jobs:
             -crypto "${{ matrix.crypto }}" \
             -parallel 4 \
             -summary-md "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Pion DD source profiles
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pion-dd-profiles-${{ matrix.os-slug }}-${{ matrix.crypto }}
+          path: target/dd-profile/pion_*.json
+          retention-days: 14
+          if-no-files-found: ignore
 
       # --- Upload pcap captures ---
       - name: Upload pcap captures (Try 1)

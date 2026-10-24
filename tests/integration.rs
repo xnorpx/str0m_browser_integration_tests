@@ -724,3 +724,53 @@ async fn server_info_and_netem_validation() {
     let (_, message) = expect_msg!(Error { session_id, message } from msg);
     assert!(message.contains("loss_percent"), "{message}");
 }
+
+#[tokio::test]
+async fn video_loopback_config_validation() {
+    init();
+    let ws_port = alloc_ws_port();
+    let _ = start_server(ws_port, ServerOptions::default()).await;
+    let mut ws = connect_ws(ws_port).await;
+    for (role, start, duration, expected) in [
+        (SdpRole::Answerer, 60, 120, "requires browser offerer"),
+        (SdpRole::Offerer, u64::MAX, 1, "overflows"),
+    ] {
+        let mut config = SessionConfig::new(role, IceMode::Lite, DtlsRole::Active);
+        config.video_loopback = Some(VideoLoopbackConfig {
+            drop_start: start,
+            drop_duration: duration,
+        });
+        let msg = client::create_session(&mut ws, "invalid_video", config)
+            .await
+            .unwrap();
+        let (_, message) = expect_msg!(Error { session_id, message } from msg);
+        assert!(message.contains(expected), "{message}");
+    }
+}
+
+#[tokio::test]
+async fn frame_video_config_validation() {
+    init();
+    let ws_port = alloc_ws_port();
+    let _ = start_server(ws_port, ServerOptions::default()).await;
+    let mut ws = connect_ws(ws_port).await;
+    for (role, loopback) in [
+        (SdpRole::Answerer, None),
+        (
+            SdpRole::Offerer,
+            Some(VideoLoopbackConfig {
+                drop_start: 0,
+                drop_duration: 0,
+            }),
+        ),
+    ] {
+        let mut config = SessionConfig::new(role, IceMode::Lite, DtlsRole::Active);
+        config.video_frame_mode = true;
+        config.video_loopback = loopback;
+        let msg = client::create_session(&mut ws, "invalid_frame_video", config)
+            .await
+            .unwrap();
+        let (_, message) = expect_msg!(Error { session_id, message } from msg);
+        assert!(message.contains("Frame interop requires"), "{message}");
+    }
+}

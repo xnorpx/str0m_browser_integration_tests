@@ -6,12 +6,17 @@
   "scripts": {
     "test": "npm test --prefix web",
     "test:chrome": "npm run test:chrome --prefix web",
+    "test:video:chrome": "npm run test:video:chrome --prefix web",
+    "test:video:edge": "npm run test:video:edge --prefix web",
+    "test:pcap": "node --test scripts/compare-dd-pcap.test.js",
+    "compare:dd-pcap": "node scripts/compare-dd-pcap.js",
     "test:edge": "npm run test:edge --prefix web",
     "test:firefox": "npm run test:firefox --prefix web",
     "test:safari": "npm run test:safari --prefix web",
     "test:snap:chrome": "npm run test:snap:chrome --prefix web",
     "test:snap:edge": "npm run test:snap:edge --prefix web",
-    "test:pion": "go -C pion run ."
+    "test:pion": "go -C pion run .",
+    "test:pion:video": "go -C pion run . -suites video"
   },
   "devDependencies": {
     "karma-webdriver-launcher": "^1.0.8"

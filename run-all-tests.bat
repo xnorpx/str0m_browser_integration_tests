@@ -167,6 +167,37 @@ if %HAS_EDGE% equ 1 (
     set /a SKIPPED+=1
 )
 
+REM -- Dependency descriptor video interop ---------------------------
+if %HAS_CHROME% equ 1 (
+    call npm run test:video:chrome
+    if !errorlevel! equ 0 (
+        echo   PASSED: DD Video - Chrome
+        set /a PASS+=1
+    ) else (
+        echo   FAILED: DD Video - Chrome
+        set FAILURES=!FAILURES! "DD Video - Chrome"
+        set /a FAIL+=1
+    )
+) else (
+    echo   Skipping DD Video Chrome (not found^)
+    set /a SKIPPED+=1
+)
+
+if %HAS_EDGE% equ 1 (
+    call npm run test:video:edge
+    if !errorlevel! equ 0 (
+        echo   PASSED: DD Video - Edge
+        set /a PASS+=1
+    ) else (
+        echo   FAILED: DD Video - Edge
+        set FAILURES=!FAILURES! "DD Video - Edge"
+        set /a FAIL+=1
+    )
+) else (
+    echo   Skipping DD Video Edge (not found^)
+    set /a SKIPPED+=1
+)
+
 REM -- Pion interop (Go) ---------------------------------------------
 echo.
 echo ===============================================

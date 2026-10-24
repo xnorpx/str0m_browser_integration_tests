@@ -31,10 +31,13 @@ func pionVersions() map[string]string {
 		if dep.Replace != nil {
 			dep = dep.Replace
 		}
-		for _, name := range []string{"webrtc", "dtls", "sctp", "ice"} {
+		for _, name := range []string{"webrtc", "dtls", "sctp", "ice", "rtp"} {
 			path := strings.TrimPrefix(dep.Path, "github.com/pion/")
 			if path == name || strings.HasPrefix(path, name+"/v") {
 				versions[name] = dep.Version
+			}
+			if dep.Path == "github.com/livekit/livekit-server" {
+				versions["livekit-dd-parser"] = dep.Version
 			}
 		}
 	}
@@ -173,6 +176,17 @@ func (rep *Report) markdown() string {
 		}
 		w("### %s\n\n", suiteTitles[suite])
 		switch suite {
+		case "video":
+			w("Pion receives AV1/RTP; the Apache-2.0 LiveKit DD parser validates semantics (no AV1 decode).\n\n")
+			w("| DTLS client | Result | Frames | Packets | Structures | DD roundtrips | Source header matches | DD wraps |\n|---|---|---|---|---|---|---|---|\n")
+			for _, r := range results {
+				if v := r.Video; v != nil {
+					w("| %s | %s | %d | %d | %d | %d | %d | %d |\n", dtlsClient(r.Case), statusIcon(r),
+						v.Frames, len(v.Packets), v.Structures, v.Roundtrips, v.MatchedSourcePackets, v.FrameNumberWraps)
+				} else {
+					w("| %s | %s | - | - | - | - | - | - |\n", dtlsClient(r.Case), statusIcon(r))
+				}
+			}
 		case "dtls":
 			writeDtlsPivot(&b, results)
 		case "snap":

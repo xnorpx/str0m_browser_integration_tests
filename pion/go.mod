@@ -4,9 +4,11 @@ go 1.24.0
 
 require (
 	github.com/gorilla/websocket v1.5.3
+	github.com/livekit/livekit-server v1.9.0
 	github.com/pion/dtls/v4 v4.0.0-rc.3
 	github.com/pion/ice/v5 v5.0.0-rc.7
 	github.com/pion/logging v0.2.4
+	github.com/pion/rtp v1.10.5
 	github.com/pion/webrtc/v5 v5.0.0-20261017023023-61d97a06cd1a
 )
 
@@ -18,7 +20,6 @@ require (
 	github.com/pion/mdns/v2 v2.2.2 // indirect
 	github.com/pion/randutil v0.1.0 // indirect
 	github.com/pion/rtcp v1.2.19 // indirect
-	github.com/pion/rtp v1.10.5 // indirect
 	github.com/pion/sctp v1.12.0 // indirect
 	github.com/pion/sdp/v3 v3.0.20 // indirect
 	github.com/pion/srtp/v3 v3.1.3 // indirect
@@ -27,6 +28,7 @@ require (
 	github.com/pion/turn/v5 v5.1.2 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	golang.org/x/crypto v0.48.0 // indirect
+	golang.org/x/exp v0.0.0-20250531010427-b6e5de432a8b // indirect
 	golang.org/x/net v0.50.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
